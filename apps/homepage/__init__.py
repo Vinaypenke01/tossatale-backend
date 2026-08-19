@@ -1,0 +1,3 @@
+"""
+apps/homepage package initialization
+"""

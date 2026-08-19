@@ -1,0 +1,3 @@
+"""
+apps/banners package initialization
+"""

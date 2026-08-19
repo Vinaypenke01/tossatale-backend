@@ -1,0 +1,3 @@
+"""
+apps/series package initialization
+"""

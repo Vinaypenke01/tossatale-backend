@@ -1,0 +1,49 @@
+Django>=5.1.4
+djangorestframework>=3.15.2
+djangorestframework-simplejwt>=5.3.1
+django-cors-headers>=4.6.0
+django-environ>=0.11.2
+django-filter>=24.3
+django-extensions>=3.2.3
+drf-spectacular>=0.27.2
+
+# Database & Server
+psycopg2-binary>=2.9.9
+gunicorn>=23.0.0
+dj-database-url>=2.3.0
+
+# Google OAuth
+google-auth>=2.37.0
+google-auth-oauthlib>=1.2.1
+requests>=2.32.3
+
+# Background tasks
+celery>=5.4.0
+redis>=5.2.1
+django-celery-beat>=2.7.0
+django-celery-results>=2.5.1
+
+# Media storage
+cloudinary>=1.41.0
+django-cloudinary-storage>=0.3.0
+
+# Email
+django-anymail[brevo]>=11.1
+
+# Content & utilities
+bleach>=6.2.0
+pillow>=10.0.0
+python-slugify>=8.0.4
+shortuuid>=1.0.13
+
+# Rate limiting
+django-ratelimit>=4.1.0
+
+# Dev tools
+ipython>=8.30.0
+
+# Testing
+pytest>=8.3.4
+pytest-django>=4.9.0
+factory-boy>=3.3.1
+faker>=33.1.0

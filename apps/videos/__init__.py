@@ -1,0 +1,3 @@
+"""
+apps/videos package initialization
+"""

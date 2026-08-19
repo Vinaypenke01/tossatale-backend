@@ -1,0 +1,3 @@
+"""
+apps/newsletters package initialization
+"""

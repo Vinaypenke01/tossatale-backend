@@ -1,0 +1,3 @@
+"""
+apps/blogs package initialization
+"""

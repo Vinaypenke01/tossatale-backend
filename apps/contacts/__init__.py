@@ -1,0 +1,3 @@
+"""
+apps/contacts package initialization
+"""
