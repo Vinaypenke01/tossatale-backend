@@ -238,12 +238,9 @@ CACHES = {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Email (Brevo via Anymail)
+# Email (Resend API)
 # ──────────────────────────────────────────────────────────────────────────────
-ANYMAIL = {
-    "BREVO_API_KEY": env("BREVO_API_KEY", default=""),
-}
-EMAIL_BACKEND = "anymail.backends.brevo.EmailBackend"
+RESEND_API_KEY = env("RESEND_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="hello@tossatale.com")
 
 # ──────────────────────────────────────────────────────────────────────────────

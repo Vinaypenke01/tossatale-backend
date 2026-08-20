@@ -35,10 +35,12 @@ class PublicWriterSerializer(serializers.ModelSerializer):
 
 class WriterProfileUpdateSerializer(serializers.ModelSerializer):
     """Used by writer to update their own profile — PATCH /api/v1/writer/profile/"""
+    name = serializers.CharField(required=False, allow_blank=True)
+
     class Meta:
         model = WriterProfile
         fields = [
-            "gender", "bio", "profile_photo",
+            "name", "gender", "bio", "profile_photo",
             "website_url", "facebook_url", "instagram_url",
             "x_url", "linkedin_url", "youtube_url",
         ]

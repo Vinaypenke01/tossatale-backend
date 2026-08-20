@@ -57,3 +57,22 @@ def paginated_response(serializer_data, paginator, message="Retrieved successful
         },
         status=status.HTTP_200_OK,
     )
+
+
+def error_response(message="An error occurred", errors=None, status_code=status.HTTP_400_BAD_REQUEST):
+    """
+    Standard error response.
+    {
+        "success": false,
+        "message": "...",
+        "errors": {}
+    }
+    """
+    return Response(
+        {
+            "success": False,
+            "message": message,
+            "errors": errors if errors is not None else {},
+        },
+        status=status_code,
+    )

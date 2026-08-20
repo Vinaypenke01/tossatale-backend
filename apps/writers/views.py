@@ -65,18 +65,24 @@ class WriterProfileView(APIView):
     permission_classes = [IsWriter]
 
     def get(self, request):
-        try:
-            profile = WriterProfile.objects.get(user=request.user)
-        except WriterProfile.DoesNotExist:
-            raise ResourceNotFoundError("Writer profile not found.")
+        profile, _ = WriterProfile.objects.get_or_create(
+            user=request.user,
+            defaults={
+                "slug": generate_unique_slug(WriterProfile, request.user.get_full_name() or request.user.email.split("@")[0] or "writer"),
+                "bio": "Tossatale Storyteller & Writer",
+            }
+        )
         serializer = PublicWriterSerializer(profile)
         return success_response(data=serializer.data)
 
     def patch(self, request):
-        try:
-            profile = WriterProfile.objects.get(user=request.user)
-        except WriterProfile.DoesNotExist:
-            raise ResourceNotFoundError("Writer profile not found.")
+        profile, _ = WriterProfile.objects.get_or_create(
+            user=request.user,
+            defaults={
+                "slug": generate_unique_slug(WriterProfile, request.user.get_full_name() or request.user.email.split("@")[0] or "writer"),
+                "bio": "Tossatale Storyteller & Writer",
+            }
+        )
         serializer = WriterProfileUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         updated = WriterService.update_writer(profile, serializer.validated_data)

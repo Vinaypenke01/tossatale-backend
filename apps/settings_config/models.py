@@ -55,3 +55,24 @@ class SiteSettings(models.Model):
     def get_solo(cls):
         obj, created = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class FAQItem(models.Model):
+    """
+    FAQ Model storing questions and answers organized by category.
+    Configurable by Admin and displayed on the public /faq screen.
+    """
+    category = models.CharField(max_length=100, default="General", db_index=True)
+    question = models.CharField(max_length=500)
+    answer = models.TextField()
+    order = models.IntegerField(default=0, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "faq_items"
+        ordering = ["order", "created_at"]
+
+    def __str__(self):
+        return f"[{self.category}] {self.question[:50]}"

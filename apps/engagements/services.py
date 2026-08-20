@@ -6,6 +6,7 @@ import hashlib
 from datetime import timedelta
 from django.utils import timezone
 from django.db import transaction
+from django.core.cache import cache
 
 from common.constants import StoryStatus
 from common.exceptions import (
@@ -32,8 +33,9 @@ class EngagementService:
         if story.status != StoryStatus.PUBLISHED:
             raise ServiceValidationError("Only published stories can be liked.")
 
-        if StoryLike.objects.filter(user=user, story=story).exists():
-            raise DuplicateResourceError("You have already liked this story.")
+        existing = StoryLike.objects.filter(user=user, story=story).first()
+        if existing:
+            return existing
 
         like = StoryLike.objects.create(user=user, story=story)
 
@@ -44,6 +46,8 @@ class EngagementService:
         writer = story.writer
         writer.total_likes += 1
         writer.save(update_fields=["total_likes"])
+
+        cache.delete("homepage")
 
         return like
 
@@ -65,6 +69,8 @@ class EngagementService:
         writer.total_likes = max(0, writer.total_likes - 1)
         writer.save(update_fields=["total_likes"])
 
+        cache.delete("homepage")
+
     @classmethod
     @transaction.atomic
     def bookmark_story(cls, user, story: Story) -> StoryBookmark:
@@ -72,8 +78,9 @@ class EngagementService:
         if story.status != StoryStatus.PUBLISHED:
             raise ServiceValidationError("Only published stories can be bookmarked.")
 
-        if StoryBookmark.objects.filter(user=user, story=story).exists():
-            raise DuplicateResourceError("Story is already bookmarked.")
+        existing = StoryBookmark.objects.filter(user=user, story=story).first()
+        if existing:
+            return existing
 
         bookmark = StoryBookmark.objects.create(user=user, story=story)
 
@@ -127,19 +134,22 @@ class EngagementService:
         completion_percentage: float = 0.0,
     ) -> StoryView:
         """
-        Records a story view with 30-minute window unique view deduplication per §25.
+        Records a story view with strict 1 view per user per day deduplication.
+        If user/IP opened the story today, no additional view count is added.
+        If opened tomorrow (new calendar day or >24h), +1 view is added.
         """
         ip_h = cls.hash_ip(ip_address)
         now = timezone.now()
-        window_start = now - timedelta(minutes=30)
+        # Today's start in current timezone (calendar day)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Determine if unique view
+        # Determine if unique view today
         is_unique = True
         if user and user.is_authenticated:
-            if StoryView.objects.filter(story=story, user=user, viewed_at__gte=window_start).exists():
+            if StoryView.objects.filter(story=story, user=user, viewed_at__gte=day_start).exists():
                 is_unique = False
         elif session_id or ip_h:
-            query = StoryView.objects.filter(story=story, viewed_at__gte=window_start)
+            query = StoryView.objects.filter(story=story, viewed_at__gte=day_start)
             if session_id:
                 query = query.filter(session_id=session_id)
             elif ip_h:
@@ -158,19 +168,31 @@ class EngagementService:
             is_unique_view=is_unique,
         )
 
-        # Update counters
-        story.views_count += 1
-        story.save(update_fields=["views_count", "updated_at"])
+        # Increment counters ONLY if this is the first view today
+        if is_unique:
+            story.views_count = (story.views_count or 0) + 1
+            story.save(update_fields=["views_count", "updated_at"])
 
-        writer = story.writer
-        writer.total_reads += 1
-        writer.save(update_fields=["total_reads"])
+            if hasattr(story, "writer") and story.writer:
+                writer = story.writer
+                writer.total_reads = (writer.total_reads or 0) + 1
+                writer.save(update_fields=["total_reads"])
 
         # Update reader history if authenticated
         if user and user.is_authenticated:
             cls.update_recently_read(user, story, completion_percentage)
 
         return view
+
+    @classmethod
+    def record_unauthenticated_like_attempt(cls, story: Story) -> int:
+        """
+        Increments the count of users who attempted to like the story
+        without being logged in and dismissed the login prompt.
+        """
+        story.unauthenticated_like_attempts = (story.unauthenticated_like_attempts or 0) + 1
+        story.save(update_fields=["unauthenticated_like_attempts", "updated_at"])
+        return story.unauthenticated_like_attempts
 
     @classmethod
     def update_recently_read(cls, user, story: Story, progress: float = 0.0) -> RecentlyRead:

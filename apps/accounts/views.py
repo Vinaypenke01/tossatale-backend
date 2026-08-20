@@ -108,6 +108,91 @@ class ForgotPasswordView(APIView):
         return success_response(message="If that email exists, a reset link has been sent.")
 
 
+class PasswordSendOTPView(APIView):
+    """POST /api/v1/auth/password/send-otp/"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        import random
+        from django.core.cache import cache
+        from django.core.mail import send_mail
+        from django.conf import settings
+
+        email = request.data.get("email", "").strip()
+        if not email and request.user.is_authenticated:
+            email = request.user.email
+
+        if not email:
+            return success_response(message="Please provide an email address.")
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            # Do not reveal whether user exists
+            return success_response(message="If that email exists, an OTP has been sent.")
+
+        otp = f"{random.randint(100000, 999999)}"
+        cache_key = f"pwd_otp_{email.lower()}"
+        cache.set(cache_key, otp, 600)  # 10 minutes
+
+        # Dispatch branded HTML email via Resend API
+        try:
+            from common.services.email_service import EmailService
+            user_name = user.first_name or user.display_name or "Storyteller"
+            EmailService.send_password_reset_otp_email(
+                to_email=email,
+                otp_code=otp,
+                user_name=user_name,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger("apps.accounts").warning("Failed to dispatch OTP email: %s", exc)
+
+        data = {"message": f"Verification OTP sent to {email}"}
+        # In DEBUG / local environment, return debug_otp for testing
+        if getattr(settings, "DEBUG", True):
+            data["debug_otp"] = otp
+
+        return success_response(data=data, message=f"Verification OTP sent to {email}")
+
+
+class PasswordResetWithOTPView(APIView):
+    """POST /api/v1/auth/password/reset-with-otp/"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from django.core.cache import cache
+        from common.exceptions import ServiceValidationError
+
+        email = request.data.get("email", "").strip()
+        if not email and request.user.is_authenticated:
+            email = request.user.email
+
+        otp = request.data.get("otp", "").strip()
+        new_password = request.data.get("new_password", "").strip()
+
+        if not email or not otp or not new_password:
+            raise ServiceValidationError("Email, OTP verification code, and new password are required.")
+
+        if len(new_password) < 8:
+            raise ServiceValidationError("Password must be at least 8 characters long.")
+
+        cache_key = f"pwd_otp_{email.lower()}"
+        cached_otp = cache.get(cache_key)
+
+        if not cached_otp or str(cached_otp).strip() != str(otp).strip():
+            raise ServiceValidationError("Invalid or expired OTP verification code. Please request a new one.")
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            raise ServiceValidationError("Account not found.")
+
+        user.set_password(new_password)
+        user.save()
+        cache.delete(cache_key)
+
+        return success_response(message="Password has been updated successfully. You can now sign in with your new password.")
+
+
 class ResetPasswordView(APIView):
     """POST /api/v1/auth/reset-password/"""
     permission_classes = [AllowAny]

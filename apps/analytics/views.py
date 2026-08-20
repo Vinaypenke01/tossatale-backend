@@ -21,7 +21,14 @@ class WriterAnalyticsOverviewView(APIView):
     permission_classes = [IsAuthenticated, IsWriter]
 
     def get(self, request):
-        writer = get_object_or_404(WriterProfile, user=request.user)
+        from common.utils import generate_unique_slug
+        writer, _ = WriterProfile.objects.get_or_create(
+            user=request.user,
+            defaults={
+                "slug": generate_unique_slug(WriterProfile, request.user.get_full_name() or request.user.email.split("@")[0] or "writer"),
+                "bio": "Tossatale Storyteller & Writer",
+            }
+        )
         stories = Story.objects.filter(writer=writer)
 
         total_views = stories.aggregate(total=Sum("views_count"))["total"] or 0
@@ -35,12 +42,14 @@ class WriterAnalyticsOverviewView(APIView):
             "summary": {
                 "total_stories": stories.count(),
                 "published_stories": stories.filter(status="PUBLISHED").count(),
+                "draft_stories": stories.filter(status="DRAFT").count(),
+                "in_review_stories": stories.filter(status="SUBMITTED").count(),
                 "total_views": total_views,
                 "total_likes": total_likes,
                 "total_shares": total_shares,
                 "total_bookmarks": total_bookmarks,
             },
-            "top_stories": StoryListSerializer(published_stories, many=True).data,
+            "top_stories": StoryListSerializer(published_stories, many=True, context={"request": request}).data,
         })
 
 
@@ -51,6 +60,7 @@ class AdminAnalyticsOverviewView(APIView):
         total_stories = Story.objects.filter(status="PUBLISHED").count()
         total_views = Story.objects.aggregate(total=Sum("views_count"))["total"] or 0
         total_likes = Story.objects.aggregate(total=Sum("likes_count"))["total"] or 0
+        total_unauth_likes = Story.objects.aggregate(total=Sum("unauthenticated_like_attempts"))["total"] or 0
         total_writers = WriterProfile.objects.count()
 
         recent_daily = DailyPlatformAnalytics.objects.all()[:30]
@@ -60,6 +70,7 @@ class AdminAnalyticsOverviewView(APIView):
                 "total_published_stories": total_stories,
                 "total_views": total_views,
                 "total_likes": total_likes,
+                "total_unauthenticated_like_attempts": total_unauth_likes,
                 "total_writers": total_writers,
             },
             "recent_daily_history": [

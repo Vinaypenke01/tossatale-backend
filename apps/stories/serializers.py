@@ -101,25 +101,43 @@ class StoryListSerializer(serializers.ModelSerializer):
     writer = WriterProfileSerializer(read_only=True)
     category = CategorySerializer(read_only=True)
     tags = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
+    is_bookmarked = serializers.SerializerMethodField()
 
     class Meta:
         model = Story
         fields = [
             "id", "writer", "title", "slug", "subtitle", "category", "tags",
             "status", "is_featured", "estimated_reading_time", "word_count",
-            "views_count", "likes_count", "bookmarks_count", "published_at",
-            "created_at"
+            "views_count", "likes_count", "bookmarks_count", "is_liked",
+            "is_bookmarked", "published_at", "created_at"
         ]
 
     def get_tags(self, obj):
         tags = [st.tag for st in obj.story_tags.all()]
         return TagSerializer(tags, many=True).data
 
+    def get_is_liked(self, obj):
+        request = self.context.get("request")
+        if request and hasattr(request, "user") and request.user.is_authenticated:
+            from apps.engagements.models import StoryLike
+            return StoryLike.objects.filter(story=obj, user=request.user).exists()
+        return False
+
+    def get_is_bookmarked(self, obj):
+        request = self.context.get("request")
+        if request and hasattr(request, "user") and request.user.is_authenticated:
+            from apps.engagements.models import StoryBookmark
+            return StoryBookmark.objects.filter(story=obj, user=request.user).exists()
+        return False
+
 
 class StoryDetailSerializer(serializers.ModelSerializer):
     writer = WriterProfileSerializer(read_only=True)
     category = CategorySerializer(read_only=True)
     tags = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
+    is_bookmarked = serializers.SerializerMethodField()
 
     class Meta:
         model = Story
@@ -129,6 +147,7 @@ class StoryDetailSerializer(serializers.ModelSerializer):
             "moderation_status", "rejection_feedback", "is_featured",
             "allow_comments", "estimated_reading_time", "word_count",
             "views_count", "likes_count", "shares_count", "bookmarks_count",
+            "is_liked", "is_bookmarked",
             "trending_score", "submitted_at", "reviewed_at", "approved_at",
             "published_at", "scheduled_publish_at", "created_at", "updated_at"
         ]
@@ -136,6 +155,20 @@ class StoryDetailSerializer(serializers.ModelSerializer):
     def get_tags(self, obj):
         tags = [st.tag for st in obj.story_tags.all()]
         return TagSerializer(tags, many=True).data
+
+    def get_is_liked(self, obj):
+        request = self.context.get("request")
+        if request and hasattr(request, "user") and request.user.is_authenticated:
+            from apps.engagements.models import StoryLike
+            return StoryLike.objects.filter(story=obj, user=request.user).exists()
+        return False
+
+    def get_is_bookmarked(self, obj):
+        request = self.context.get("request")
+        if request and hasattr(request, "user") and request.user.is_authenticated:
+            from apps.engagements.models import StoryBookmark
+            return StoryBookmark.objects.filter(story=obj, user=request.user).exists()
+        return False
 
 
 class AdminStorySerializer(serializers.ModelSerializer):
@@ -154,7 +187,7 @@ class AdminStorySerializer(serializers.ModelSerializer):
             "reviewed_at", "reviewed_by", "reviewed_by_email", "approved_at",
             "published_at", "scheduled_publish_at", "archived_at", "is_featured",
             "allow_comments", "estimated_reading_time", "word_count", "views_count",
-            "likes_count", "shares_count", "bookmarks_count", "trending_score",
+            "likes_count", "unauthenticated_like_attempts", "shares_count", "bookmarks_count", "trending_score",
             "reviews", "created_at", "updated_at"
         ]
 

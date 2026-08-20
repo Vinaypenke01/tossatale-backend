@@ -16,10 +16,24 @@ class StoryLikeSerializer(serializers.ModelSerializer):
 
 class StoryBookmarkSerializer(serializers.ModelSerializer):
     story = StoryListSerializer(read_only=True)
+    reading_progress = serializers.SerializerMethodField()
+    completed = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
 
     class Meta:
         model = StoryBookmark
-        fields = ["id", "story", "created_at"]
+        fields = ["id", "story", "reading_progress", "completed", "is_liked", "created_at"]
+
+    def get_reading_progress(self, obj):
+        recent = RecentlyRead.objects.filter(user=obj.user, story=obj.story).first()
+        return float(recent.reading_progress) if recent else 0.0
+
+    def get_completed(self, obj):
+        recent = RecentlyRead.objects.filter(user=obj.user, story=obj.story).first()
+        return bool(recent.completed) if recent else False
+
+    def get_is_liked(self, obj):
+        return StoryLike.objects.filter(user=obj.user, story=obj.story).exists()
 
 
 class StoryShareSerializer(serializers.ModelSerializer):

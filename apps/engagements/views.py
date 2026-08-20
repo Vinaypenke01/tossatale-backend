@@ -77,7 +77,7 @@ class PublicStoryListView(APIView):
 
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request)
-        serializer = StoryListSerializer(page, many=True)
+        serializer = StoryListSerializer(page, many=True, context={"request": request})
         return paginator.get_paginated_response(serializer.data)
 
 
@@ -85,23 +85,23 @@ class PublicStoryDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
-        """Fetch published story details by slug and increment view count."""
+        """Fetch published story details by slug and record view with 1-view-per-day deduplication."""
         story = get_object_or_404(
             Story.objects.select_related("writer", "category").prefetch_related("story_tags__tag"),
             slug=slug,
             status=StoryStatus.PUBLISHED,
         )
 
-        # Increment views count on full story page load
-        Story.objects.filter(id=story.id).update(views_count=F("views_count") + 1)
-        story.refresh_from_db(fields=["views_count"])
+        # Record view with strict 1 view per user/IP per day deduplication
+        ip_addr = request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip() or request.META.get("REMOTE_ADDR", "")
+        EngagementService.record_view(
+            story=story,
+            user=request.user if request.user.is_authenticated else None,
+            session_id=request.session.session_key or "",
+            ip_address=ip_addr,
+        )
 
-        if story.writer:
-            WriterProfile.objects.filter(id=story.writer.id).update(total_reads=F("total_reads") + 1)
-
-        cache.delete("homepage")
-
-        return success_response(data=StoryDetailSerializer(story).data)
+        return success_response(data=StoryDetailSerializer(story, context={"request": request}).data)
 
 
 class PublicRelatedStoriesView(APIView):
@@ -209,6 +209,19 @@ class StoryLikeToggleView(APIView):
         return success_response(
             data={"likes_count": story.likes_count},
             message="Story unliked."
+        )
+
+
+class StoryLikeDismissView(APIView):
+    """Tracks when an unauthenticated reader attempts to like a story but dismisses login."""
+    permission_classes = [AllowAny]
+
+    def post(self, request, pk):
+        story = get_object_or_404(Story, pk=pk)
+        attempts = EngagementService.record_unauthenticated_like_attempt(story)
+        return success_response(
+            data={"unauthenticated_like_attempts": attempts},
+            message="Dismissed like attempt recorded."
         )
 
 

@@ -45,6 +45,18 @@ class PublicContactFormView(APIView):
         # Update rate count in Redis with 1-hour expiration (3600 seconds)
         cache.set(cache_key, submissions + 1, 3600)
 
+        # Dispatch confirmation email via Resend
+        try:
+            from common.services.email_service import EmailService
+            EmailService.send_contact_confirmation_email(
+                to_email=email,
+                sender_name=name,
+                inquiry_type=subject or "General Inquiry",
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger("apps.contacts").warning("Failed to send contact confirmation: %s", exc)
+
         return created_response(
             data={"id": str(msg.id)},
             message="Thank you for contacting Tossatale! We will get back to you shortly."

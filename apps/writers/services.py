@@ -52,10 +52,19 @@ class WriterService:
         return profile
 
     @staticmethod
+    @transaction.atomic
     def update_writer(profile: WriterProfile, data: dict) -> WriterProfile:
         """Update writable writer profile fields."""
+        if "name" in data and data["name"]:
+            full_name = data["name"].strip()
+            parts = full_name.split(" ", 1)
+            profile.user.first_name = parts[0]
+            profile.user.last_name = parts[1] if len(parts) > 1 else ""
+            profile.user.display_name = full_name
+            profile.user.save(update_fields=["first_name", "last_name", "display_name"])
+
         allowed = {
-            "bio", "profile_photo", "website_url",
+            "gender", "bio", "profile_photo", "website_url",
             "facebook_url", "instagram_url", "x_url",
             "linkedin_url", "youtube_url",
         }

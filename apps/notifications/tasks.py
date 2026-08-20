@@ -112,25 +112,21 @@ def send_story_submission_email(self, story_id: str):
 def send_story_approval_email(self, story_id: str):
     """Notify writer when their story is approved."""
     try:
-        from django.core.mail import send_mail
-        from django.conf import settings
         from apps.stories.models import Story
+        from common.services.email_service import EmailService
 
         story = Story.objects.select_related("writer__user").get(pk=story_id)
         user = story.writer.user
+        writer_name = getattr(story.writer, "pen_name", None) or user.get_short_name() or "Storyteller"
 
-        send_mail(
-            subject=f"Your story '{story.title}' has been approved!",
-            message=(
-                f"Hi {user.get_short_name()},\n\n"
-                f"Great news! Your story '{story.title}' has been approved by our editorial team.\n\n"
-                "Thank you for sharing your story with Tossatale!\n\nThe Tossatale Team"
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
-            fail_silently=True,
+        EmailService.send_editorial_status_email(
+            to_email=user.email,
+            writer_name=writer_name,
+            story_title=story.title,
+            status="PUBLISHED",
+            feedback="",
         )
-        logger.info("Story approval email sent to writer for story %s", story_id)
+        logger.info("Story approval email sent to writer for story %s via Resend", story_id)
     except Exception as exc:
         logger.warning("Story approval email failed or skipped: %s", exc)
 
@@ -139,25 +135,20 @@ def send_story_approval_email(self, story_id: str):
 def send_story_rejection_email(self, story_id: str):
     """Notify writer when their story requires changes or is rejected."""
     try:
-        from django.core.mail import send_mail
-        from django.conf import settings
         from apps.stories.models import Story
+        from common.services.email_service import EmailService
 
         story = Story.objects.select_related("writer__user").get(pk=story_id)
         user = story.writer.user
+        writer_name = getattr(story.writer, "pen_name", None) or user.get_short_name() or "Storyteller"
 
-        send_mail(
-            subject=f"Update regarding your story '{story.title}'",
-            message=(
-                f"Hi {user.get_short_name()},\n\n"
-                f"Our editorial team reviewed your story '{story.title}' and requested changes before it can be published.\n\n"
-                f"Editorial Feedback:\n{story.rejection_feedback}\n\n"
-                "You can edit your draft and submit it again for review anytime.\n\nThe Tossatale Team"
-            ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
-            fail_silently=True,
+        EmailService.send_editorial_status_email(
+            to_email=user.email,
+            writer_name=writer_name,
+            story_title=story.title,
+            status="REJECTED",
+            feedback=story.rejection_feedback or "Please review and revise your draft.",
         )
-        logger.info("Story rejection feedback email sent to writer for story %s", story_id)
+        logger.info("Story rejection feedback email sent to writer for story %s via Resend", story_id)
     except Exception as exc:
         logger.warning("Story rejection email failed or skipped: %s", exc)

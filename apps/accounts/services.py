@@ -81,6 +81,14 @@ class AuthService:
         if not user.is_active:
             raise InactiveUserError()
 
+        # Enforce maintenance mode — allow only ADMIN users
+        from apps.settings_config.models import SiteSettings
+        site_settings = SiteSettings.get_solo()
+        if site_settings.maintenance_mode and user.role != UserRole.ADMIN and not user.is_staff:
+            raise AuthenticationError(
+                "Tossatale is currently under maintenance. Only administrators can log in at this time."
+            )
+
         # Update last activity
         user.last_activity_at = timezone.now()
         user.save(update_fields=["last_activity_at"])
@@ -100,6 +108,14 @@ class AuthService:
         from google.oauth2 import id_token as google_id_token
         from google.auth.transport import requests as google_requests
 
+        # Check maintenance mode — Google login is for readers, block during maintenance
+        from apps.settings_config.models import SiteSettings
+        site_settings = SiteSettings.get_solo()
+        if site_settings.maintenance_mode:
+            raise AuthenticationError(
+                "Tossatale is currently under maintenance. Only administrators can log in at this time."
+            )
+
         try:
             payload = google_id_token.verify_oauth2_token(
                 id_token,
@@ -116,21 +132,27 @@ class AuthService:
             raise AuthenticationError("Google account email is not available.")
 
         with transaction.atomic():
-            user, created = User.objects.get_or_create(
-                email=email,
-                defaults={
-                    "google_id": google_id,
-                    "first_name": payload.get("given_name", ""),
-                    "last_name": payload.get("family_name", ""),
-                    "profile_photo": payload.get("picture", ""),
-                    "auth_provider": AuthProvider.GOOGLE,
-                    "is_email_verified": True,
-                    "role": UserRole.USER,
-                },
-            )
-
-            if created:
+            existing_user = User.objects.filter(email=email).first()
+            if existing_user:
+                if existing_user.role in [UserRole.WRITER, UserRole.ADMIN]:
+                    raise AuthenticationError(
+                        "Google login is only available for Readers. Writers and Editors/Admins must sign in with their email and password."
+                    )
+                user = existing_user
+                created = False
+            else:
+                user = User.objects.create(
+                    email=email,
+                    google_id=google_id,
+                    first_name=payload.get("given_name", ""),
+                    last_name=payload.get("family_name", ""),
+                    profile_photo=payload.get("picture", ""),
+                    auth_provider=AuthProvider.GOOGLE,
+                    is_email_verified=True,
+                    role=UserRole.USER,
+                )
                 NotificationPreference.objects.create(user=user)
+                created = True
 
             if not user.is_active:
                 raise InactiveUserError()

@@ -88,6 +88,7 @@ class Story(models.Model):
     likes_count = models.BigIntegerField(default=0)
     shares_count = models.BigIntegerField(default=0)
     bookmarks_count = models.BigIntegerField(default=0)
+    unauthenticated_like_attempts = models.BigIntegerField(default=0)
 
     # Dynamic ranking
     trending_score = models.DecimalField(
