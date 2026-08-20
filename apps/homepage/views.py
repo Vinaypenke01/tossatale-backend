@@ -30,7 +30,12 @@ class PublicHomepageView(APIView):
         Stitches homepage data from enabled sections and caches in Redis for 15 minutes.
         Enriches user-specific engagement (likes/bookmarks) for authenticated readers.
         """
-        cached_homepage = cache.get("homepage")
+        cached_homepage = None
+        try:
+            cached_homepage = cache.get("homepage")
+        except Exception:
+            pass
+
         if cached_homepage:
             payload = dict(cached_homepage)
         else:
@@ -110,7 +115,10 @@ class PublicHomepageView(APIView):
             payload["categories"] = CategorySerializer(categories, many=True).data
 
             # Cache payload for 15 minutes (900 seconds)
-            cache.set("homepage", payload, 900)
+            try:
+                cache.set("homepage", payload, 900)
+            except Exception:
+                pass
 
         # Clone and enrich payload with user engagement state (likes & bookmarks)
         res_payload = {}

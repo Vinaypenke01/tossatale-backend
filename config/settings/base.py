@@ -25,6 +25,8 @@ ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 # ──────────────────────────────────────────────────────────────────────────────
 # Applications
 # ──────────────────────────────────────────────────────────────────────────────
+USE_POSTGRES = env.bool("USE_POSTGRES", default=False)
+
 DJANGO_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -32,8 +34,9 @@ DJANGO_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "django.contrib.postgres",
 ]
+if USE_POSTGRES:
+    DJANGO_APPS.append("django.contrib.postgres")
 
 THIRD_PARTY_APPS = [
     "rest_framework",
@@ -212,30 +215,44 @@ SIMPLE_JWT = {
 # ──────────────────────────────────────────────────────────────────────────────
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS",
-    default=["http://localhost:8080", "http://localhost:3000"],
+    default=["http://localhost:8080", "http://localhost:3000", "https://tossatale.com", "https://www.tossatale.com"],
 )
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = env.list(
+    "CSRF_TRUSTED_ORIGINS",
+    default=["http://localhost:8080", "https://tossatale.com", "https://www.tossatale.com"],
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Celery
 # ──────────────────────────────────────────────────────────────────────────────
-CELERY_BROKER_URL = env("REDIS_URL", default="redis://localhost:6379/0")
+CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379/1")
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Redis Cache
+# Cache Configuration (Redis when USE_REDIS=True, LocMemCache when False)
 # ──────────────────────────────────────────────────────────────────────────────
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": env("REDIS_URL", default="redis://localhost:6379/0"),
+USE_REDIS = env.bool("USE_REDIS", default=False)
+if USE_REDIS:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": env("REDIS_URL", default="redis://localhost:6379/0"),
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "tossatale-cache",
+        }
+    }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Email (Resend API)
