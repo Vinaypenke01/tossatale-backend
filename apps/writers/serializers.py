@@ -11,6 +11,7 @@ class PublicWriterSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()
     email = serializers.SerializerMethodField()
     social_links = serializers.SerializerMethodField()
+    total_supports = serializers.SerializerMethodField()
 
     class Meta:
         model = WriterProfile
@@ -18,7 +19,7 @@ class PublicWriterSerializer(serializers.ModelSerializer):
             "id", "slug", "name", "email", "gender",
             "bio", "profile_photo",
             "is_verified", "verified_at",
-            "total_stories", "total_reads", "total_likes", "total_shares",
+            "total_stories", "total_reads", "total_likes", "total_supports", "total_shares",
             "social_links", "created_at",
         ]
         read_only_fields = fields
@@ -31,6 +32,9 @@ class PublicWriterSerializer(serializers.ModelSerializer):
 
     def get_social_links(self, obj):
         return obj.get_social_links()
+
+    def get_total_supports(self, obj):
+        return obj.total_likes or 0
 
 
 class WriterProfileUpdateSerializer(serializers.ModelSerializer):
@@ -51,6 +55,7 @@ class AdminWriterSerializer(serializers.ModelSerializer):
     user = UserMeSerializer(read_only=True)
     social_links = serializers.SerializerMethodField()
     total_stories = serializers.SerializerMethodField()
+    total_supports = serializers.SerializerMethodField()
 
     class Meta:
         model = WriterProfile
@@ -59,13 +64,13 @@ class AdminWriterSerializer(serializers.ModelSerializer):
             "bio", "profile_photo",
             "is_verified", "verified_at", "verified_by",
             "is_active",
-            "total_stories", "total_reads", "total_likes", "total_shares",
+            "total_stories", "total_reads", "total_likes", "total_supports", "total_shares",
             "social_links", "created_at", "updated_at",
         ]
         read_only_fields = [
             "id", "slug", "user", "is_verified", "verified_at",
             "verified_by", "total_stories", "total_reads",
-            "total_likes", "total_shares", "created_at",
+            "total_likes", "total_supports", "total_shares", "created_at",
         ]
 
     def get_social_links(self, obj):
@@ -74,6 +79,9 @@ class AdminWriterSerializer(serializers.ModelSerializer):
     def get_total_stories(self, obj):
         return obj.stories.count()
 
+    def get_total_supports(self, obj):
+        return obj.total_likes or 0
+
 
 class AdminWriterListSerializer(serializers.ModelSerializer):
     """Compact writer list for Admin table view."""
@@ -81,13 +89,14 @@ class AdminWriterListSerializer(serializers.ModelSerializer):
     email = serializers.SerializerMethodField()
     role = serializers.SerializerMethodField()
     total_stories = serializers.SerializerMethodField()
+    total_supports = serializers.SerializerMethodField()
 
     class Meta:
         model = WriterProfile
         fields = [
             "id", "slug", "name", "email", "role", "gender",
             "is_verified", "is_active",
-            "total_stories", "total_reads",
+            "total_stories", "total_reads", "total_likes", "total_supports",
             "created_at",
         ]
         read_only_fields = fields
@@ -103,6 +112,9 @@ class AdminWriterListSerializer(serializers.ModelSerializer):
 
     def get_total_stories(self, obj):
         return obj.stories.count()
+
+    def get_total_supports(self, obj):
+        return obj.total_likes or 0
 
 
 WriterProfileSerializer = PublicWriterSerializer

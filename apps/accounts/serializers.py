@@ -14,6 +14,16 @@ from apps.accounts.models import User, NotificationPreference
 # Auth Serializers
 # ──────────────────────────────────────────────────────────────────────────────
 
+class RegisterSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, min_length=8)
+    first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    role = serializers.CharField(required=False, default="USER")
+    bio = serializers.CharField(required=False, allow_blank=True)
+    website_url = serializers.URLField(required=False, allow_blank=True)
+
+
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)

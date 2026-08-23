@@ -17,6 +17,7 @@ from apps.accounts.serializers import (
     LoginSerializer,
     LogoutSerializer,
     NotificationPreferenceSerializer,
+    RegisterSerializer,
     ResetPasswordSerializer,
     UserMeSerializer,
     UserProfileUpdateSerializer,
@@ -33,6 +34,21 @@ User = get_user_model()
 # ──────────────────────────────────────────────────────────────────────────────
 # Authentication Views
 # ──────────────────────────────────────────────────────────────────────────────
+
+class RegisterView(APIView):
+    """POST /api/v1/auth/register/ — Register Reader or Writer"""
+    permission_classes = [AllowAny]
+    serializer_class = RegisterSerializer
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = AuthService.register(serializer.validated_data, request=request)
+        return created_response(
+            data=result,
+            message="Account registered successfully.",
+        )
+
 
 class LoginView(APIView):
     """POST /api/v1/auth/login/"""
@@ -148,11 +164,33 @@ class PasswordSendOTPView(APIView):
             logging.getLogger("apps.accounts").warning("Failed to dispatch OTP email: %s", exc)
 
         data = {"message": f"Verification OTP sent to {email}"}
-        # In DEBUG / local environment, return debug_otp for testing
-        if getattr(settings, "DEBUG", True):
-            data["debug_otp"] = otp
-
         return success_response(data=data, message=f"Verification OTP sent to {email}")
+
+
+class PasswordVerifyOTPView(APIView):
+    """POST /api/v1/auth/password/verify-otp/"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from django.core.cache import cache
+        from common.exceptions import ServiceValidationError
+
+        email = request.data.get("email", "").strip()
+        otp = request.data.get("otp", "").strip()
+
+        if not email or not otp:
+            raise ServiceValidationError("Email and 6-digit verification code are required.")
+
+        cache_key = f"pwd_otp_{email.lower()}"
+        cached_otp = cache.get(cache_key)
+
+        if not cached_otp or str(cached_otp).strip() != str(otp).strip():
+            raise ServiceValidationError("Invalid or expired verification code. Please check the code or request a new one.")
+
+        return success_response(
+            data={"email": email, "verified": True},
+            message="Verification code validated successfully."
+        )
 
 
 class PasswordResetWithOTPView(APIView):

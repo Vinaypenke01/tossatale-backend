@@ -68,6 +68,75 @@ class AuthService:
         )
 
     @staticmethod
+    def register(data: dict, request=None) -> dict:
+        """
+        Register a new reader or writer account.
+        Returns token pair + user profile data.
+        """
+        email = data.get("email", "").strip().lower()
+        password = data.get("password", "")
+        first_name = data.get("first_name", "").strip()
+        last_name = data.get("last_name", "").strip()
+        role_str = str(data.get("role", "USER")).upper()
+
+        if not email or not password:
+            raise ServiceValidationError("Email and password are required.")
+
+        if len(password) < 8:
+            raise ServiceValidationError("Password must be at least 8 characters long.")
+
+        if User.objects.filter(email__iexact=email).exists():
+            raise ServiceValidationError("An account with this email address already exists.")
+
+        # Determine user role
+        role = UserRole.WRITER if role_str in ["WRITER", "AUTHOR"] else UserRole.USER
+
+        # Enforce maintenance mode — block registrations during maintenance
+        from apps.settings_config.models import SiteSettings
+        site_settings = SiteSettings.get_solo()
+        if site_settings.maintenance_mode:
+            raise AuthenticationError(
+                "Tossatale is currently under maintenance. New registrations are temporarily disabled."
+            )
+
+        with transaction.atomic():
+            user = User.objects.create(
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                display_name=f"{first_name} {last_name}".strip() or email.split("@")[0],
+                role=role,
+                auth_provider=AuthProvider.EMAIL,
+                is_active=True,
+                is_email_verified=False,
+            )
+            user.set_password(password)
+            user.save()
+
+            NotificationPreference.objects.create(user=user)
+
+            if role == UserRole.WRITER:
+                from apps.writers.services import WriterService
+                WriterService.create_writer(user, {
+                    "bio": data.get("bio", ""),
+                    "website_url": data.get("website_url", ""),
+                })
+
+        user.last_activity_at = timezone.now()
+        user.save(update_fields=["last_activity_at"])
+
+        tokens = AuthService._generate_token_pair(user)
+        AuthService._create_session(user, tokens["refresh"], request)
+
+        from apps.accounts.serializers import UserMeSerializer
+        logger.info("User registered: %s (role=%s)", user.email, user.role)
+        return {
+            "access": tokens["access"],
+            "refresh": tokens["refresh"],
+            "user": UserMeSerializer(user).data,
+        }
+
+    @staticmethod
     def email_login(email: str, password: str, request=None) -> dict:
         """
         Authenticate user with email + password.

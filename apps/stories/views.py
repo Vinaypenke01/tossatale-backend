@@ -58,7 +58,11 @@ class WriterStoryListCreateView(APIView):
         if status_param:
             queryset = queryset.filter(status=status_param.upper())
         if category_param:
-            queryset = queryset.filter(category__id=category_param)
+            try:
+                val = uuid.UUID(str(category_param))
+                queryset = queryset.filter(Q(category__id=val) | Q(category__slug=category_param))
+            except (ValueError, AttributeError):
+                queryset = queryset.filter(category__slug=category_param)
         if search_param:
             queryset = queryset.filter(
                 Q(title__icontains=search_param) | Q(subtitle__icontains=search_param)
@@ -239,9 +243,17 @@ class AdminStoryListView(APIView):
         if status_param:
             queryset = queryset.filter(status=status_param.upper())
         if writer_param:
-            queryset = queryset.filter(writer__id=writer_param)
+            try:
+                val = uuid.UUID(str(writer_param))
+                queryset = queryset.filter(Q(writer__id=val) | Q(writer__slug=writer_param))
+            except (ValueError, AttributeError):
+                queryset = queryset.filter(Q(writer__slug=writer_param) | Q(writer__user__email__iexact=writer_param))
         if category_param:
-            queryset = queryset.filter(category__id=category_param)
+            try:
+                val = uuid.UUID(str(category_param))
+                queryset = queryset.filter(Q(category__id=val) | Q(category__slug=category_param))
+            except (ValueError, AttributeError):
+                queryset = queryset.filter(category__slug=category_param)
         if moderation_param:
             queryset = queryset.filter(moderation_status=moderation_param.upper())
         if featured_param is not None:

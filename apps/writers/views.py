@@ -3,7 +3,7 @@ apps/writers — Views
 """
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, generics
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
 from apps.writers.models import WriterProfile
@@ -46,6 +46,7 @@ class PublicWriterListView(generics.ListAPIView):
 
 class PublicWriterDetailView(APIView):
     """GET /api/v1/public/writers/{slug}/"""
+    permission_classes = [AllowAny]
 
     def get(self, request, slug):
         try:
@@ -54,6 +55,30 @@ class PublicWriterDetailView(APIView):
             raise ResourceNotFoundError("Writer not found.")
         serializer = PublicWriterSerializer(profile)
         return success_response(data=serializer.data)
+
+
+class PublicWriterSupportView(APIView):
+    """POST /api/v1/public/writers/{slug}/support/"""
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        try:
+            profile = WriterProfile.objects.select_related("user").get(slug=slug, is_active=True)
+        except WriterProfile.DoesNotExist:
+            raise ResourceNotFoundError("Writer not found.")
+
+        profile.total_likes = (profile.total_likes or 0) + 1
+        profile.save(update_fields=["total_likes"])
+
+        return success_response(
+            data={
+                "slug": profile.slug,
+                "supports_count": profile.total_likes,
+                "total_supports": profile.total_likes,
+                "is_supported": True,
+            },
+            message=f"Thank you for supporting {profile.name}!"
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -111,22 +136,34 @@ class AdminWriterListView(generics.ListAPIView):
         return WriterProfile.all_objects.select_related("user").all()
 
 
-class AdminWriterDetailView(APIView):
-    """GET/PATCH /api/v1/admin/writers/{id}/"""
-    permission_classes = [IsAdmin]
+def _get_writer_profile_by_lookup(lookup):
+    """Retrieve WriterProfile by UUID, slug, or user email."""
+    import uuid
+    try:
+        val = uuid.UUID(str(lookup))
+        return WriterProfile.all_objects.select_related("user", "verified_by").get(pk=val)
+    except (ValueError, AttributeError):
+        pass
 
-    def _get_profile(self, pk):
+    try:
+        return WriterProfile.all_objects.select_related("user", "verified_by").get(slug=lookup)
+    except WriterProfile.DoesNotExist:
         try:
-            return WriterProfile.all_objects.select_related("user", "verified_by").get(pk=pk)
+            return WriterProfile.all_objects.select_related("user", "verified_by").get(user__email__iexact=lookup)
         except WriterProfile.DoesNotExist:
             raise ResourceNotFoundError("Writer not found.")
 
-    def get(self, request, pk):
-        profile = self._get_profile(pk)
+
+class AdminWriterDetailView(APIView):
+    """GET/PATCH /api/v1/admin/writers/{lookup}/ (UUID or slug)"""
+    permission_classes = [IsAdmin]
+
+    def get(self, request, lookup):
+        profile = _get_writer_profile_by_lookup(lookup)
         return success_response(data=AdminWriterSerializer(profile).data)
 
-    def patch(self, request, pk):
-        profile = self._get_profile(pk)
+    def patch(self, request, lookup):
+        profile = _get_writer_profile_by_lookup(lookup)
         serializer = AdminWriterSerializer(profile, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -134,53 +171,41 @@ class AdminWriterDetailView(APIView):
 
 
 class AdminWriterVerifyView(APIView):
-    """POST /api/v1/admin/writers/{id}/verify/"""
+    """POST /api/v1/admin/writers/{lookup}/verify/"""
     permission_classes = [IsAdmin]
 
-    def post(self, request, pk):
-        try:
-            profile = WriterProfile.all_objects.get(pk=pk)
-        except WriterProfile.DoesNotExist:
-            raise ResourceNotFoundError("Writer not found.")
+    def post(self, request, lookup):
+        profile = _get_writer_profile_by_lookup(lookup)
         WriterService.verify_writer(profile, request.user)
         return success_response(message="Writer verified successfully.")
 
 
 class AdminWriterUnverifyView(APIView):
-    """POST /api/v1/admin/writers/{id}/unverify/"""
+    """POST /api/v1/admin/writers/{lookup}/unverify/"""
     permission_classes = [IsAdmin]
 
-    def post(self, request, pk):
-        try:
-            profile = WriterProfile.all_objects.get(pk=pk)
-        except WriterProfile.DoesNotExist:
-            raise ResourceNotFoundError("Writer not found.")
+    def post(self, request, lookup):
+        profile = _get_writer_profile_by_lookup(lookup)
         WriterService.unverify_writer(profile, request.user)
         return success_response(message="Writer verification revoked.")
 
 
 class AdminWriterActivateView(APIView):
-    """POST /api/v1/admin/writers/{id}/activate/"""
+    """POST /api/v1/admin/writers/{lookup}/activate/"""
     permission_classes = [IsAdmin]
 
-    def post(self, request, pk):
-        try:
-            profile = WriterProfile.all_objects.get(pk=pk)
-        except WriterProfile.DoesNotExist:
-            raise ResourceNotFoundError("Writer not found.")
+    def post(self, request, lookup):
+        profile = _get_writer_profile_by_lookup(lookup)
         WriterService.activate_writer(profile, request.user)
         return success_response(message="Writer activated.")
 
 
 class AdminWriterDeactivateView(APIView):
-    """POST /api/v1/admin/writers/{id}/deactivate/"""
+    """POST /api/v1/admin/writers/{lookup}/deactivate/"""
     permission_classes = [IsAdmin]
 
-    def post(self, request, pk):
-        try:
-            profile = WriterProfile.all_objects.get(pk=pk)
-        except WriterProfile.DoesNotExist:
-            raise ResourceNotFoundError("Writer not found.")
+    def post(self, request, lookup):
+        profile = _get_writer_profile_by_lookup(lookup)
         WriterService.deactivate_writer(profile, request.user)
         return success_response(message="Writer deactivated.")
 
