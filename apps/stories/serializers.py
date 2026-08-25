@@ -32,14 +32,24 @@ class StoryRevisionSerializer(serializers.ModelSerializer):
 
 class StoryReviewSerializer(serializers.ModelSerializer):
     reviewer_email = serializers.EmailField(source="reviewer.email", read_only=True)
+    reviewer_name = serializers.SerializerMethodField()
 
     class Meta:
         model = StoryReview
         fields = [
-            "id", "reviewer", "reviewer_email", "decision",
+            "id", "reviewer", "reviewer_email", "reviewer_name", "decision",
             "feedback", "internal_notes", "reviewed_at"
         ]
         read_only_fields = fields
+
+    def get_reviewer_name(self, obj):
+        if obj.reviewer:
+            return (
+                getattr(obj.reviewer, "display_name", "")
+                or getattr(obj.reviewer, "first_name", "")
+                or obj.reviewer.email.split("@")[0]
+            )
+        return "Editorial Team"
 
 
 class StoryCreateSerializer(serializers.Serializer):
@@ -57,12 +67,11 @@ class StoryCreateSerializer(serializers.Serializer):
     allow_comments = serializers.BooleanField(default=True)
 
     def validate_category_id(self, value):
-        try:
-            category = Category.objects.get(id=value)
-            if not category.is_active:
-                raise serializers.ValidationError("Selected category is inactive.")
-        except Category.DoesNotExist:
+        category = Category.objects.filter(id=value).first()
+        if not category:
             raise serializers.ValidationError("Category does not exist.")
+        if not category.is_active:
+            raise serializers.ValidationError("Selected category is inactive.")
         return value
 
     def validate_tag_ids(self, value):
@@ -88,13 +97,16 @@ class StoryUpdateSerializer(serializers.Serializer):
     change_summary = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
     def validate_category_id(self, value):
-        try:
-            category = Category.objects.get(id=value)
+        if value:
+            category = Category.objects.filter(id=value).first()
+            if not category:
+                raise serializers.ValidationError("Category does not exist.")
             if not category.is_active:
                 raise serializers.ValidationError("Selected category is inactive.")
-        except Category.DoesNotExist:
-            raise serializers.ValidationError("Category does not exist.")
         return value
+
+
+from common.constants import StoryStatus, ReviewDecision
 
 
 class StoryListSerializer(serializers.ModelSerializer):
@@ -103,32 +115,46 @@ class StoryListSerializer(serializers.ModelSerializer):
     tags = serializers.SerializerMethodField()
     is_liked = serializers.SerializerMethodField()
     is_bookmarked = serializers.SerializerMethodField()
+    rejection_count = serializers.SerializerMethodField()
+    reviews = StoryReviewSerializer(many=True, read_only=True)
 
     class Meta:
         model = Story
         fields = [
             "id", "writer", "title", "slug", "subtitle", "category", "tags",
-            "status", "is_featured", "estimated_reading_time", "word_count",
+            "status", "moderation_status", "rejection_feedback", "rejection_count",
+            "reviews", "is_featured", "estimated_reading_time", "word_count",
             "views_count", "likes_count", "bookmarks_count", "is_liked",
-            "is_bookmarked", "published_at", "created_at"
+            "is_bookmarked", "published_at", "submitted_at", "reviewed_at",
+            "created_at", "updated_at"
         ]
+
+    def get_rejection_count(self, obj):
+        cnt = sum(1 for r in obj.reviews.all() if r.decision == ReviewDecision.REJECTED)
+        if cnt == 0 and obj.status == StoryStatus.REJECTED and obj.rejection_feedback:
+            return 1
+        return cnt
 
     def get_tags(self, obj):
         tags = [st.tag for st in obj.story_tags.all()]
         return TagSerializer(tags, many=True).data
 
     def get_is_liked(self, obj):
+        liked_ids = self.context.get("liked_ids")
+        if liked_ids is not None:
+            return obj.id in liked_ids
         request = self.context.get("request")
         if request and hasattr(request, "user") and request.user.is_authenticated:
-            from apps.engagements.models import StoryLike
-            return StoryLike.objects.filter(story=obj, user=request.user).exists()
+            return obj.likes.filter(user=request.user).exists()
         return False
 
     def get_is_bookmarked(self, obj):
+        bookmarked_ids = self.context.get("bookmarked_ids")
+        if bookmarked_ids is not None:
+            return obj.id in bookmarked_ids
         request = self.context.get("request")
         if request and hasattr(request, "user") and request.user.is_authenticated:
-            from apps.engagements.models import StoryBookmark
-            return StoryBookmark.objects.filter(story=obj, user=request.user).exists()
+            return obj.bookmarked_by.filter(user=request.user).exists()
         return False
 
 
@@ -138,36 +164,48 @@ class StoryDetailSerializer(serializers.ModelSerializer):
     tags = serializers.SerializerMethodField()
     is_liked = serializers.SerializerMethodField()
     is_bookmarked = serializers.SerializerMethodField()
+    rejection_count = serializers.SerializerMethodField()
+    reviews = StoryReviewSerializer(many=True, read_only=True)
 
     class Meta:
         model = Story
         fields = [
             "id", "writer", "title", "slug", "subtitle", "content", "plain_text_content",
             "category", "tags", "seo_title", "seo_description", "status",
-            "moderation_status", "rejection_feedback", "is_featured",
+            "moderation_status", "rejection_feedback", "rejection_count", "is_featured",
             "allow_comments", "estimated_reading_time", "word_count",
             "views_count", "likes_count", "shares_count", "bookmarks_count",
-            "is_liked", "is_bookmarked",
-            "trending_score", "submitted_at", "reviewed_at", "approved_at",
-            "published_at", "scheduled_publish_at", "created_at", "updated_at"
+            "is_liked", "is_bookmarked", "trending_score", "submitted_at",
+            "reviewed_at", "approved_at", "published_at", "scheduled_publish_at",
+            "reviews", "created_at", "updated_at"
         ]
+
+    def get_rejection_count(self, obj):
+        cnt = sum(1 for r in obj.reviews.all() if r.decision == ReviewDecision.REJECTED)
+        if cnt == 0 and obj.status == StoryStatus.REJECTED and obj.rejection_feedback:
+            return 1
+        return cnt
 
     def get_tags(self, obj):
         tags = [st.tag for st in obj.story_tags.all()]
         return TagSerializer(tags, many=True).data
 
     def get_is_liked(self, obj):
+        liked_ids = self.context.get("liked_ids")
+        if liked_ids is not None:
+            return obj.id in liked_ids
         request = self.context.get("request")
         if request and hasattr(request, "user") and request.user.is_authenticated:
-            from apps.engagements.models import StoryLike
-            return StoryLike.objects.filter(story=obj, user=request.user).exists()
+            return obj.likes.filter(user=request.user).exists()
         return False
 
     def get_is_bookmarked(self, obj):
+        bookmarked_ids = self.context.get("bookmarked_ids")
+        if bookmarked_ids is not None:
+            return obj.id in bookmarked_ids
         request = self.context.get("request")
         if request and hasattr(request, "user") and request.user.is_authenticated:
-            from apps.engagements.models import StoryBookmark
-            return StoryBookmark.objects.filter(story=obj, user=request.user).exists()
+            return obj.bookmarked_by.filter(user=request.user).exists()
         return False
 
 
@@ -176,6 +214,7 @@ class AdminStorySerializer(serializers.ModelSerializer):
     category = CategorySerializer(read_only=True)
     reviewed_by_email = serializers.EmailField(source="reviewed_by.email", read_only=True)
     reviews = StoryReviewSerializer(many=True, read_only=True)
+    rejection_count = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
 
     class Meta:
@@ -183,13 +222,20 @@ class AdminStorySerializer(serializers.ModelSerializer):
         fields = [
             "id", "writer", "created_by", "title", "slug", "subtitle", "content",
             "plain_text_content", "category", "tags", "seo_title", "seo_description",
-            "status", "moderation_status", "rejection_feedback", "submitted_at",
-            "reviewed_at", "reviewed_by", "reviewed_by_email", "approved_at",
-            "published_at", "scheduled_publish_at", "archived_at", "is_featured",
-            "allow_comments", "estimated_reading_time", "word_count", "views_count",
-            "likes_count", "unauthenticated_like_attempts", "shares_count", "bookmarks_count", "trending_score",
-            "reviews", "created_at", "updated_at"
+            "status", "moderation_status", "rejection_feedback", "rejection_count",
+            "submitted_at", "reviewed_at", "reviewed_by", "reviewed_by_email",
+            "approved_at", "published_at", "scheduled_publish_at", "archived_at",
+            "is_featured", "allow_comments", "estimated_reading_time", "word_count",
+            "views_count", "likes_count", "unauthenticated_like_attempts",
+            "shares_count", "bookmarks_count", "trending_score", "reviews",
+            "created_at", "updated_at"
         ]
+
+    def get_rejection_count(self, obj):
+        cnt = sum(1 for r in obj.reviews.all() if r.decision == ReviewDecision.REJECTED)
+        if cnt == 0 and obj.status == StoryStatus.REJECTED and obj.rejection_feedback:
+            return 1
+        return cnt
 
     def get_tags(self, obj):
         tags = [st.tag for st in obj.story_tags.all()]

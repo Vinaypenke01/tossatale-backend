@@ -11,6 +11,7 @@ from django.core.cache import cache
 from common.constants import StoryStatus
 from common.responses import success_response, created_response
 from common.pagination import StandardResultsSetPagination
+from common.utils import get_engagement_context
 from apps.stories.models import Story
 from apps.writers.models import WriterProfile
 from apps.stories.serializers import StoryListSerializer, StoryDetailSerializer
@@ -33,7 +34,7 @@ class PublicStoryListView(APIView):
 
     def get(self, request):
         """Browse published stories with category, tag, writer, series, verified, and ordering filters."""
-        queryset = Story.objects.filter(status=StoryStatus.PUBLISHED).select_related("writer", "category").prefetch_related("story_tags__tag")
+        queryset = Story.objects.filter(status=StoryStatus.PUBLISHED).select_related("writer", "category").prefetch_related("story_tags__tag", "reviews")
 
         search_param = request.query_params.get("search")
         category_param = request.query_params.get("category")
@@ -77,7 +78,8 @@ class PublicStoryListView(APIView):
 
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request)
-        serializer = StoryListSerializer(page, many=True, context={"request": request})
+        context = {"request": request, **get_engagement_context(request)}
+        serializer = StoryListSerializer(page, many=True, context=context)
         return paginator.get_paginated_response(serializer.data)
 
 
@@ -87,7 +89,7 @@ class PublicStoryDetailView(APIView):
     def get(self, request, slug):
         """Fetch published story details by slug and record view with 1-view-per-day deduplication."""
         story = get_object_or_404(
-            Story.objects.select_related("writer", "category").prefetch_related("story_tags__tag"),
+            Story.objects.select_related("writer", "category").prefetch_related("story_tags__tag", "reviews"),
             slug=slug,
             status=StoryStatus.PUBLISHED,
         )
@@ -101,7 +103,8 @@ class PublicStoryDetailView(APIView):
             ip_address=ip_addr,
         )
 
-        return success_response(data=StoryDetailSerializer(story, context={"request": request}).data)
+        context = {"request": request, **get_engagement_context(request)}
+        return success_response(data=StoryDetailSerializer(story, context=context).data)
 
 
 class PublicRelatedStoriesView(APIView):
@@ -112,9 +115,10 @@ class PublicRelatedStoriesView(APIView):
         story = get_object_or_404(Story, slug=slug, status=StoryStatus.PUBLISHED)
         related = Story.objects.filter(
             status=StoryStatus.PUBLISHED, category=story.category
-        ).exclude(id=story.id).order_by("-views_count")[:6]
+        ).exclude(id=story.id).select_related("writer", "category").prefetch_related("story_tags__tag", "reviews").order_by("-views_count")[:6]
 
-        serializer = StoryListSerializer(related, many=True)
+        context = {"request": request, **get_engagement_context(request)}
+        serializer = StoryListSerializer(related, many=True, context=context)
         return success_response(data=serializer.data)
 
 

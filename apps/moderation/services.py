@@ -35,16 +35,46 @@ class ModerationService:
     @staticmethod
     def sanitize_text(text: str) -> str:
         """
-        Strips dangerous script tags or inline event handlers from prose text.
+        Strips dangerous script tags, event handlers, and unauthorized HTML.
+        Uses bleach/nh3 allowlist from settings.
         """
         if not text:
             return ""
 
-        # Remove script tags
-        sanitized = re.sub(r"<script.*?>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
-        # Remove onerror, onload attributes
-        sanitized = re.sub(r"\s*on\w+=\".*?\"", "", sanitized, flags=re.IGNORECASE)
-        return sanitized.strip()
+        from django.conf import settings
+        allowed_tags = getattr(settings, "ALLOWED_HTML_TAGS", [
+            "p", "br", "strong", "em", "u", "s", "blockquote",
+            "h2", "h3", "h4", "ul", "ol", "li", "a", "img",
+        ])
+        allowed_attrs = getattr(settings, "ALLOWED_HTML_ATTRS", {
+            "a": ["href", "title", "target"],
+            "img": ["src", "alt", "width", "height"],
+        })
+
+        try:
+            import nh3
+            return nh3.clean(
+                text,
+                tags=set(allowed_tags),
+                attributes={k: set(v) for k, v in allowed_attrs.items()} if isinstance(allowed_attrs, dict) else {},
+            ).strip()
+        except ImportError:
+            pass
+
+        try:
+            import bleach
+            return bleach.clean(
+                text,
+                tags=allowed_tags,
+                attributes=allowed_attrs,
+                strip=True,
+            ).strip()
+        except ImportError:
+            # Fallback regex sanitization
+            sanitized = re.sub(r"<script.*?>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
+            sanitized = re.sub(r"\s*on\w+=\S+", "", sanitized, flags=re.IGNORECASE)
+            sanitized = re.sub(r"javascript:", "", sanitized, flags=re.IGNORECASE)
+            return sanitized.strip()
 
     @staticmethod
     def detect_spam(text: str) -> bool:

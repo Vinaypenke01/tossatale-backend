@@ -39,63 +39,63 @@ class PublicHomepageView(APIView):
         if cached_homepage:
             payload = dict(cached_homepage)
         else:
-            sections = HomepageSection.objects.filter(is_enabled=True).order_by("display_order")
+            all_sections = {sec.section_key: sec for sec in HomepageSection.objects.all()}
             payload = {}
 
             # Default fallback configs
-            announcement_sec = HomepageSection.objects.filter(section_key="ANNOUNCEMENT").first()
+            announcement_sec = all_sections.get("ANNOUNCEMENT")
             payload["announcement"] = announcement_sec.config if announcement_sec else {}
 
-            footer_sec = HomepageSection.objects.filter(section_key="FOOTER").first()
+            footer_sec = all_sections.get("FOOTER")
             payload["footer"] = footer_sec.config if footer_sec else {}
 
-            contact_sec = HomepageSection.objects.filter(section_key="CONTACT").first()
+            contact_sec = all_sections.get("CONTACT")
             payload["contact"] = contact_sec.config if contact_sec else {}
 
             # Check custom story section slot configs from Admin Builder
-            story_section_config = HomepageSection.objects.filter(section_key="STORY_SLOTS").first()
+            story_section_config = all_sections.get("STORY_SLOTS")
             slot_config = story_section_config.config if story_section_config else {}
             payload["story_slots"] = slot_config
 
             # 1. Featured stories (2 stories)
             feat_ids = slot_config.get("featured_story_ids", [])
             if feat_ids and isinstance(feat_ids, list):
-                feat_stories = list(Story.objects.filter(id__in=feat_ids, status="PUBLISHED").select_related("writer", "category"))
+                feat_stories = list(Story.objects.filter(id__in=feat_ids, status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews"))
                 feat_dict = {str(s.id): s for s in feat_stories}
                 ordered_feat = [feat_dict[str(sid)] for sid in feat_ids if str(sid) in feat_dict]
                 if ordered_feat:
                     payload["featured_stories"] = StoryListSerializer(ordered_feat[:2], many=True).data
 
             if "featured_stories" not in payload or not payload["featured_stories"]:
-                feat_stories = Story.objects.filter(status="PUBLISHED", is_featured=True).select_related("writer", "category")[:2]
+                feat_stories = Story.objects.filter(status="PUBLISHED", is_featured=True).select_related("writer", "category").prefetch_related("story_tags__tag", "reviews")[:2]
                 if not feat_stories.exists():
-                    feat_stories = Story.objects.filter(status="PUBLISHED").select_related("writer", "category")[:2]
+                    feat_stories = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews")[:2]
                 payload["featured_stories"] = StoryListSerializer(feat_stories, many=True).data
 
             # 2. Latest stories (3 stories)
             latest_ids = slot_config.get("latest_story_ids", [])
             if latest_ids and isinstance(latest_ids, list):
-                latest_stories = list(Story.objects.filter(id__in=latest_ids, status="PUBLISHED").select_related("writer", "category"))
+                latest_stories = list(Story.objects.filter(id__in=latest_ids, status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews"))
                 latest_dict = {str(s.id): s for s in latest_stories}
                 ordered_latest = [latest_dict[str(sid)] for sid in latest_ids if str(sid) in latest_dict]
                 if ordered_latest:
                     payload["latest_stories"] = StoryListSerializer(ordered_latest[:3], many=True).data
 
             if "latest_stories" not in payload or not payload["latest_stories"]:
-                latest = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").order_by("-published_at")[:3]
+                latest = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews").order_by("-published_at")[:3]
                 payload["latest_stories"] = StoryListSerializer(latest, many=True).data
 
             # 3. Trending stories (3 stories)
             trending_ids = slot_config.get("trending_story_ids", [])
             if trending_ids and isinstance(trending_ids, list):
-                trending_stories = list(Story.objects.filter(id__in=trending_ids, status="PUBLISHED").select_related("writer", "category"))
+                trending_stories = list(Story.objects.filter(id__in=trending_ids, status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews"))
                 trending_dict = {str(s.id): s for s in trending_stories}
                 ordered_trending = [trending_dict[str(sid)] for sid in trending_ids if str(sid) in trending_dict]
                 if ordered_trending:
                     payload["trending_stories"] = StoryListSerializer(ordered_trending[:3], many=True).data
 
             if "trending_stories" not in payload or not payload["trending_stories"]:
-                trending = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").order_by("-trending_score", "-views_count")[:3]
+                trending = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews").order_by("-trending_score", "-views_count")[:3]
                 payload["trending_stories"] = StoryListSerializer(trending, many=True).data
 
             # Featured/Latest blogs (4 blogs)
@@ -151,7 +151,7 @@ class AdminHomepageSectionListView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
-        sections = HomepageSection.objects.all().order_by("display_order")
+        sections = list(HomepageSection.objects.all().order_by("display_order"))
         sections_data = [
             {
                 "id": str(sec.id),
@@ -164,12 +164,12 @@ class AdminHomepageSectionListView(APIView):
             for sec in sections
         ]
 
-        # Extract config objects
-        announcement_sec = HomepageSection.objects.filter(section_key="ANNOUNCEMENT").first()
-        featured_writers_sec = HomepageSection.objects.filter(section_key="FEATURED_WRITERS").first()
-        footer_sec = HomepageSection.objects.filter(section_key="FOOTER").first()
-        contact_sec = HomepageSection.objects.filter(section_key="CONTACT").first()
-        story_slots_sec = HomepageSection.objects.filter(section_key="STORY_SLOTS").first()
+        sec_map = {sec.section_key: sec for sec in sections}
+        announcement_sec = sec_map.get("ANNOUNCEMENT")
+        featured_writers_sec = sec_map.get("FEATURED_WRITERS")
+        footer_sec = sec_map.get("FOOTER")
+        contact_sec = sec_map.get("CONTACT")
+        story_slots_sec = sec_map.get("STORY_SLOTS")
 
         data = {
             "sections": sections_data,

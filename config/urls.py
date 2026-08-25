@@ -42,6 +42,9 @@ urlpatterns = [
     path("api/v1/admin/stories/", include("apps.stories.urls.admin_urls")),
     path("api/v1/admin/reviews/", include("apps.stories.urls.review")),
 
+    # ── Notifications ──
+    path("api/v1/notifications/", include("apps.notifications.urls")),
+
     # ── Public routes ──
     path("api/v1/public/", include(categories_public)),
     path("api/v1/public/writers/", include(writers_public)),

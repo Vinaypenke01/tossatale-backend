@@ -85,12 +85,6 @@ class User(AbstractBaseUser, PermissionsMixin):
     class Meta:
         db_table = "users"
         ordering = ["-created_at"]
-        indexes = [
-            models.Index(fields=["email"]),
-            models.Index(fields=["role"]),
-            models.Index(fields=["is_active"]),
-            models.Index(fields=["created_at"]),
-        ]
 
     def __str__(self):
         return f"{self.get_full_name()} <{self.email}>"

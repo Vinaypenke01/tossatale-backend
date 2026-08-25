@@ -14,6 +14,8 @@ from common.exceptions import (
     DuplicateResourceError,
     ResourceNotFoundError,
 )
+from django.db.models import F
+from apps.writers.models import WriterProfile
 from apps.stories.models import Story
 from apps.engagements.models import StoryLike, StoryBookmark, StoryShare, StoryView, RecentlyRead
 
@@ -39,13 +41,17 @@ class EngagementService:
 
         like = StoryLike.objects.create(user=user, story=story)
 
-        # Increment counts
-        story.likes_count += 1
-        story.save(update_fields=["likes_count", "updated_at"])
+        # Atomic increment counts
+        Story.objects.filter(id=story.id).update(
+            likes_count=F("likes_count") + 1,
+            updated_at=timezone.now()
+        )
+        story.refresh_from_db(fields=["likes_count"])
 
-        writer = story.writer
-        writer.total_likes += 1
-        writer.save(update_fields=["total_likes"])
+        if story.writer_id:
+            WriterProfile.objects.filter(id=story.writer_id).update(
+                total_likes=F("total_likes") + 1
+            )
 
         cache.delete("homepage")
 
@@ -62,12 +68,16 @@ class EngagementService:
 
         like.delete()
 
-        story.likes_count = max(0, story.likes_count - 1)
-        story.save(update_fields=["likes_count", "updated_at"])
+        Story.objects.filter(id=story.id).update(
+            likes_count=F("likes_count") - 1,
+            updated_at=timezone.now()
+        )
+        story.refresh_from_db(fields=["likes_count"])
 
-        writer = story.writer
-        writer.total_likes = max(0, writer.total_likes - 1)
-        writer.save(update_fields=["total_likes"])
+        if story.writer_id:
+            WriterProfile.objects.filter(id=story.writer_id).update(
+                total_likes=F("total_likes") - 1
+            )
 
         cache.delete("homepage")
 
@@ -84,8 +94,11 @@ class EngagementService:
 
         bookmark = StoryBookmark.objects.create(user=user, story=story)
 
-        story.bookmarks_count += 1
-        story.save(update_fields=["bookmarks_count", "updated_at"])
+        Story.objects.filter(id=story.id).update(
+            bookmarks_count=F("bookmarks_count") + 1,
+            updated_at=timezone.now()
+        )
+        story.refresh_from_db(fields=["bookmarks_count"])
 
         return bookmark
 
@@ -100,8 +113,11 @@ class EngagementService:
 
         bookmark.delete()
 
-        story.bookmarks_count = max(0, story.bookmarks_count - 1)
-        story.save(update_fields=["bookmarks_count", "updated_at"])
+        Story.objects.filter(id=story.id).update(
+            bookmarks_count=F("bookmarks_count") - 1,
+            updated_at=timezone.now()
+        )
+        story.refresh_from_db(fields=["bookmarks_count"])
 
     @classmethod
     @transaction.atomic
@@ -116,8 +132,11 @@ class EngagementService:
             ip_hash=ip_h,
         )
 
-        story.shares_count += 1
-        story.save(update_fields=["shares_count", "updated_at"])
+        Story.objects.filter(id=story.id).update(
+            shares_count=F("shares_count") + 1,
+            updated_at=timezone.now()
+        )
+        story.refresh_from_db(fields=["shares_count"])
 
         return share
 
@@ -170,13 +189,16 @@ class EngagementService:
 
         # Increment counters ONLY if this is the first view today
         if is_unique:
-            story.views_count = (story.views_count or 0) + 1
-            story.save(update_fields=["views_count", "updated_at"])
+            Story.objects.filter(id=story.id).update(
+                views_count=F("views_count") + 1,
+                updated_at=timezone.now()
+            )
+            story.refresh_from_db(fields=["views_count"])
 
-            if hasattr(story, "writer") and story.writer:
-                writer = story.writer
-                writer.total_reads = (writer.total_reads or 0) + 1
-                writer.save(update_fields=["total_reads"])
+            if story.writer_id:
+                WriterProfile.objects.filter(id=story.writer_id).update(
+                    total_reads=F("total_reads") + 1
+                )
 
         # Update reader history if authenticated
         if user and user.is_authenticated:

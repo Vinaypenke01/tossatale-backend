@@ -6,18 +6,59 @@ import math
 from django.utils.text import slugify as django_slugify
 
 
-def generate_unique_slug(model_class, title: str, field: str = "slug") -> str:
+import uuid as _uuid
+
+
+def generate_unique_slug(model_class, title: str, field: str = "slug", instance_id=None) -> str:
     """
-    Generate a unique slug for a model instance.
+    Generate a unique slug for a model instance in a single query.
     Appends a numeric suffix if a collision exists.
     """
-    base_slug = django_slugify(title)
-    slug = base_slug
+    base_slug = django_slugify(title) or "item"
+    qs = model_class.objects.filter(**{f"{field}__startswith": base_slug})
+    if instance_id:
+        qs = qs.exclude(id=instance_id)
+    existing = set(qs.values_list(field, flat=True))
+    if base_slug not in existing:
+        return base_slug
     counter = 1
-    while model_class.objects.filter(**{field: slug}).exists():
-        slug = f"{base_slug}-{counter}"
+    while f"{base_slug}-{counter}" in existing:
         counter += 1
-    return slug
+    return f"{base_slug}-{counter}"
+
+
+def get_engagement_context(request) -> dict:
+    """
+    Returns liked_ids and bookmarked_ids sets for the current user.
+    Enriches serializer context in list views to avoid N+1 queries.
+    """
+    if not request or not hasattr(request, "user") or not request.user.is_authenticated:
+        return {"liked_ids": set(), "bookmarked_ids": set()}
+    from apps.engagements.models import StoryLike, StoryBookmark
+    liked_ids = set(
+        StoryLike.objects.filter(user=request.user).values_list("story_id", flat=True)
+    )
+    bookmarked_ids = set(
+        StoryBookmark.objects.filter(user=request.user).values_list("story_id", flat=True)
+    )
+    return {"liked_ids": liked_ids, "bookmarked_ids": bookmarked_ids}
+
+
+def resolve_category(category_input: str):
+    """
+    Resolves a Category from a slug or UUID string without auto-activating or auto-creating.
+    """
+    from apps.categories.models import Category
+    if not category_input:
+        return None
+    obj = Category.objects.filter(slug=category_input).first()
+    if obj:
+        return obj
+    try:
+        _uuid.UUID(str(category_input))
+        return Category.objects.filter(id=category_input).first()
+    except (ValueError, TypeError):
+        return None
 
 
 def calculate_reading_time(text: str, words_per_minute: int = 238) -> int:

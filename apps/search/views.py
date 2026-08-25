@@ -6,6 +6,7 @@ from rest_framework.permissions import AllowAny
 from django.db.models import Q
 
 from common.responses import success_response
+from common.utils import get_engagement_context
 from apps.stories.models import Story
 from apps.stories.serializers import StoryListSerializer
 from apps.blogs.models import Blog
@@ -58,8 +59,9 @@ class UnifiedSearchView(APIView):
             else:
                 story_qs = story_qs.order_by("-trending_score", "-views_count", "-published_at")
 
-            stories = story_qs.select_related("writer", "writer__user", "category")[:24]
-            results["stories"] = StoryListSerializer(stories, many=True, context={"request": request}).data
+            stories = story_qs.select_related("writer", "writer__user", "category").prefetch_related("story_tags__tag", "reviews")[:24]
+            context = {"request": request, **get_engagement_context(request)}
+            results["stories"] = StoryListSerializer(stories, many=True, context=context).data
 
         # 2. Writers
         if search_type in ["all", "writer", "writers"]:

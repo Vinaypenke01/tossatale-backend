@@ -17,7 +17,8 @@ from common.constants import StoryStatus
 from common.permissions import IsWriter, IsAdmin
 from common.responses import success_response, created_response, no_content_response
 from common.pagination import StandardResultsSetPagination
-from common.exceptions import ResourceNotFoundError, PermissionDeniedError
+from common.exceptions import ResourceNotFoundError, PermissionDeniedError, ServiceValidationError
+from common.utils import resolve_category, get_engagement_context
 
 from apps.categories.models import Category
 from apps.writers.models import WriterProfile
@@ -36,20 +37,41 @@ from apps.stories.serializers import (
 from apps.stories.services import StoryService
 
 
+def _get_writer_profile(user):
+    """Gets the WriterProfile for a user, auto-creating if missing for writer/admin."""
+    user_identifier = (
+        getattr(user, "display_name", "")
+        or getattr(user, "first_name", "")
+        or getattr(user, "email", "writer")
+    )
+    if "@" in user_identifier:
+        user_identifier = user_identifier.split("@")[0]
+
+    writer_slug = slugify(user_identifier) or "writer"
+    writer = WriterProfile.objects.filter(user=user).first()
+    if not writer:
+        if WriterProfile.objects.filter(slug=writer_slug).exists():
+            writer_slug = f"{writer_slug}-{user.id}"
+        writer, _ = WriterProfile.objects.get_or_create(
+            user=user,
+            defaults={"slug": writer_slug, "bio": "Tossatale Writer"}
+        )
+    return writer
+
+
 class WriterStoryListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsWriter]
     pagination_class = StandardResultsSetPagination
 
     def get(self, request):
         """List own stories with optional status, category, and search filters."""
-        writer, _ = WriterProfile.objects.get_or_create(
-            user=request.user,
-            defaults={
-                "slug": slugify(request.user.email.split("@")[0]) or "writer",
-                "bio": "Tossatale Writer",
-            }
+        writer = _get_writer_profile(request.user)
+        queryset = (
+            Story.objects.filter(writer=writer)
+            .select_related("writer", "category")
+            .prefetch_related("story_tags__tag", "reviews")
+            .order_by("-created_at")
         )
-        queryset = Story.objects.filter(writer=writer).select_related("writer", "category").prefetch_related("story_tags__tag")
 
         status_param = request.query_params.get("status")
         category_param = request.query_params.get("category")
@@ -70,43 +92,20 @@ class WriterStoryListCreateView(APIView):
 
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request)
-        serializer = StoryListSerializer(page, many=True)
+        context = {"request": request, **get_engagement_context(request)}
+        serializer = StoryListSerializer(page, many=True, context=context)
         return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
         """Create a new story draft for writer."""
-        user_identifier = (
-            getattr(request.user, "display_name", "")
-            or getattr(request.user, "first_name", "")
-            or getattr(request.user, "email", "writer")
-        )
-        if "@" in user_identifier:
-            user_identifier = user_identifier.split("@")[0]
-
-        writer_slug = slugify(user_identifier) or "writer"
-        if WriterProfile.objects.filter(slug=writer_slug).exclude(user=request.user).exists():
-            writer_slug = f"{writer_slug}-{request.user.id}"
-
-        writer, _ = WriterProfile.objects.get_or_create(
-            user=request.user,
-            defaults={"slug": writer_slug, "bio": "Tossatale Writer"}
-        )
+        writer = _get_writer_profile(request.user)
 
         data = request.data.copy()
         category_input = data.get("category")
-        category_obj = None
-
-        if category_input:
-            category_obj = Category.objects.filter(slug=category_input).first()
-            if not category_obj:
-                try:
-                    uuid.UUID(str(category_input))
-                    category_obj = Category.objects.filter(id=category_input).first()
-                except (ValueError, TypeError):
-                    pass
+        category_obj = resolve_category(category_input)
 
         if not category_obj:
-            category_obj = Category.objects.first()
+            category_obj = Category.objects.filter(is_active=True).first()
             if not category_obj:
                 category_obj = Category.objects.create(
                     name="General",
@@ -117,13 +116,9 @@ class WriterStoryListCreateView(APIView):
                 )
 
         if not category_obj.is_active:
-            category_obj.is_active = True
-            category_obj.save(update_fields=["is_active"])
+            raise ServiceValidationError("The selected category is inactive.")
 
         data["category_id"] = str(category_obj.id)
-        content_text = data.get("content", "").strip()
-        if len(content_text) < 100:
-            data["content"] = (content_text + " ").ljust(105, ".")
 
         serializer = StoryCreateSerializer(data=data)
         serializer.is_valid(raise_exception=True)
@@ -131,7 +126,7 @@ class WriterStoryListCreateView(APIView):
         story = StoryService.create_story(writer, serializer.validated_data)
         attach_story_tags(story, request.data.get("tags") or request.data.get("tag_names"))
         return created_response(
-            data=StoryDetailSerializer(story).data,
+            data=StoryDetailSerializer(story, context={"request": request, **get_engagement_context(request)}).data,
             message="Story draft created successfully."
         )
 
@@ -140,10 +135,7 @@ class WriterStoryDetailView(APIView):
     permission_classes = [IsAuthenticated, IsWriter]
 
     def _get_story(self, request, pk):
-        writer, _ = WriterProfile.objects.get_or_create(
-            user=request.user,
-            defaults={"slug": slugify(request.user.email.split("@")[0]) or "writer", "bio": "Tossatale Writer"}
-        )
+        writer = _get_writer_profile(request.user)
         story = Story.objects.filter(slug=pk).first()
         if not story:
             try:
@@ -159,30 +151,29 @@ class WriterStoryDetailView(APIView):
 
     def get(self, request, pk):
         story = self._get_story(request, pk)
-        return success_response(data=StoryDetailSerializer(story).data)
+        context = {"request": request, **get_engagement_context(request)}
+        return success_response(data=StoryDetailSerializer(story, context=context).data)
 
     def patch(self, request, pk):
         story = self._get_story(request, pk)
         data = request.data.copy()
         category_input = data.get("category")
         if category_input:
-            cat_obj = Category.objects.filter(slug=category_input).first()
+            cat_obj = resolve_category(category_input)
             if not cat_obj:
-                try:
-                    uuid.UUID(str(category_input))
-                    cat_obj = Category.objects.filter(id=category_input).first()
-                except (ValueError, TypeError):
-                    pass
-            if cat_obj:
-                data["category_id"] = str(cat_obj.id)
+                raise ServiceValidationError("Invalid category specified.")
+            if not cat_obj.is_active:
+                raise ServiceValidationError("The selected category is inactive.")
+            data["category_id"] = str(cat_obj.id)
 
         serializer = StoryUpdateSerializer(data=data)
         serializer.is_valid(raise_exception=True)
 
         updated_story = StoryService.update_story(story, serializer.validated_data, request.user)
         attach_story_tags(updated_story, request.data.get("tags") or request.data.get("tag_names"))
+        context = {"request": request, **get_engagement_context(request)}
         return success_response(
-            data=StoryDetailSerializer(updated_story).data,
+            data=StoryDetailSerializer(updated_story, context=context).data,
             message="Story updated successfully."
         )
 
@@ -196,14 +187,12 @@ class WriterStorySubmitView(APIView):
     permission_classes = [IsAuthenticated, IsWriter]
 
     def post(self, request, pk):
-        writer, _ = WriterProfile.objects.get_or_create(
-            user=request.user,
-            defaults={"slug": slugify(request.user.email.split("@")[0]) or "writer", "bio": "Tossatale Writer"}
-        )
+        writer = _get_writer_profile(request.user)
         story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
         submitted_story = StoryService.submit_story(story, writer)
+        context = {"request": request, **get_engagement_context(request)}
         return success_response(
-            data=StoryDetailSerializer(submitted_story).data,
+            data=StoryDetailSerializer(submitted_story, context=context).data,
             message="Story submitted for review successfully."
         )
 
@@ -212,14 +201,12 @@ class WriterStoryDuplicateView(APIView):
     permission_classes = [IsAuthenticated, IsWriter]
 
     def post(self, request, pk):
-        writer, _ = WriterProfile.objects.get_or_create(
-            user=request.user,
-            defaults={"slug": slugify(request.user.email.split("@")[0]) or "writer", "bio": "Tossatale Writer"}
-        )
+        writer = _get_writer_profile(request.user)
         story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk, writer=writer)
         cloned_story = StoryService.duplicate_story(story, writer)
+        context = {"request": request, **get_engagement_context(request)}
         return created_response(
-            data=StoryDetailSerializer(cloned_story).data,
+            data=StoryDetailSerializer(cloned_story, context=context).data,
             message="Story duplicated into a new draft."
         )
 
@@ -231,7 +218,12 @@ class AdminStoryListView(APIView):
     pagination_class = StandardResultsSetPagination
 
     def get(self, request):
-        queryset = Story.objects.all().select_related("writer", "category", "reviewed_by").prefetch_related("story_tags__tag", "reviews")
+        queryset = (
+            Story.objects.all()
+            .select_related("writer", "category", "reviewed_by")
+            .prefetch_related("story_tags__tag", "reviews", "reviews__reviewer")
+            .order_by("-created_at")
+        )
 
         status_param = request.query_params.get("status")
         writer_param = request.query_params.get("writer")
@@ -274,41 +266,13 @@ class AdminStoryListView(APIView):
 
     def post(self, request):
         """Create and publish a story directly as Admin."""
-        user_name = (
-            getattr(request.user, "display_name", "")
-            or getattr(request.user, "first_name", "")
-            or getattr(request.user, "email", "editor")
-        )
-        if "@" in user_name:
-            user_name = user_name.split("@")[0]
-
-        writer_slug = slugify(user_name) or "editor"
-        if WriterProfile.objects.filter(slug=writer_slug).exclude(user=request.user).exists():
-            writer_slug = f"{writer_slug}-{request.user.id}"
-
-        writer, _ = WriterProfile.objects.get_or_create(
-            user=request.user,
-            defaults={
-                "slug": writer_slug,
-                "bio": "Editorial Desk",
-                "is_verified": True,
-            }
-        )
+        writer = _get_writer_profile(request.user)
         data = request.data.copy()
         category_input = data.get("category")
-        category_obj = None
-
-        if category_input:
-            category_obj = Category.objects.filter(slug=category_input).first()
-            if not category_obj:
-                try:
-                    uuid.UUID(str(category_input))
-                    category_obj = Category.objects.filter(id=category_input).first()
-                except (ValueError, TypeError):
-                    pass
+        category_obj = resolve_category(category_input)
 
         if not category_obj:
-            category_obj = Category.objects.first()
+            category_obj = Category.objects.filter(is_active=True).first()
             if not category_obj:
                 category_obj = Category.objects.create(
                     name="General",
@@ -319,14 +283,9 @@ class AdminStoryListView(APIView):
                 )
 
         if not category_obj.is_active:
-            category_obj.is_active = True
-            category_obj.save(update_fields=["is_active"])
+            raise ServiceValidationError("The selected category is inactive.")
 
         data["category_id"] = str(category_obj.id)
-
-        content_text = data.get("content", "").strip()
-        if len(content_text) < 100:
-            data["content"] = (content_text + " ").ljust(105, ".")
 
         serializer = StoryCreateSerializer(data=data)
         serializer.is_valid(raise_exception=True)
@@ -335,7 +294,7 @@ class AdminStoryListView(APIView):
         attach_story_tags(story, request.data.get("tags") or request.data.get("tag_names"))
 
         status_req = request.data.get("status")
-        if status_req == "PUBLISHED":
+        if status_req == StoryStatus.PUBLISHED:
             now = timezone.now()
             story.status = StoryStatus.PUBLISHED
             story.published_at = now
@@ -378,15 +337,12 @@ class AdminStoryDetailView(APIView):
         data = request.data.copy()
         category_input = data.get("category")
         if category_input:
-            cat_obj = Category.objects.filter(slug=category_input).first()
+            cat_obj = resolve_category(category_input)
             if not cat_obj:
-                try:
-                    uuid.UUID(str(category_input))
-                    cat_obj = Category.objects.filter(id=category_input).first()
-                except (ValueError, TypeError):
-                    pass
-            if cat_obj:
-                data["category_id"] = str(cat_obj.id)
+                raise ServiceValidationError("Invalid category specified.")
+            if not cat_obj.is_active:
+                raise ServiceValidationError("The selected category is inactive.")
+            data["category_id"] = str(cat_obj.id)
 
         serializer = StoryUpdateSerializer(data=data)
         serializer.is_valid(raise_exception=True)
@@ -394,7 +350,7 @@ class AdminStoryDetailView(APIView):
         attach_story_tags(updated_story, request.data.get("tags") or request.data.get("tag_names"))
 
         status_req = request.data.get("status")
-        if status_req == "PUBLISHED" and updated_story.status != "PUBLISHED":
+        if status_req == StoryStatus.PUBLISHED and updated_story.status != StoryStatus.PUBLISHED:
             now = timezone.now()
             updated_story.status = StoryStatus.PUBLISHED
             updated_story.published_at = now
@@ -449,7 +405,11 @@ class AdminReviewQueueView(APIView):
                 | Q(status__iexact="SUBMITTED")
             )
 
-        queryset = queryset.select_related("writer", "category", "writer__user").prefetch_related("story_tags__tag").order_by("-created_at")
+        queryset = (
+            queryset.select_related("writer", "category", "writer__user")
+            .prefetch_related("story_tags__tag", "reviews", "reviews__reviewer")
+            .order_by("-created_at")
+        )
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request)
         serializer = AdminStorySerializer(page, many=True)
@@ -460,37 +420,21 @@ class AdminApproveStoryView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request, pk):
-        try:
-            story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
-            if story.status != StoryStatus.PENDING_REVIEW and story.status != StoryStatus.APPROVED:
-                story.status = StoryStatus.PENDING_REVIEW
-                story.save(update_fields=["status", "updated_at"])
+        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        if story.status != StoryStatus.PENDING_REVIEW and story.status != StoryStatus.APPROVED:
+            story.status = StoryStatus.PENDING_REVIEW
+            story.save(update_fields=["status", "updated_at"])
 
-            if story.status != StoryStatus.APPROVED:
-                story = StoryService.approve_story(story, request.user)
+        if story.status != StoryStatus.APPROVED:
+            story = StoryService.approve_story(story, request.user)
 
-            published_story = StoryService.publish_story(story, request.user)
-            cache.delete("homepage")
+        published_story = StoryService.publish_story(story, request.user)
+        cache.delete("homepage")
 
-            return success_response(
-                data=AdminStorySerializer(published_story).data,
-                message="Story approved and published live successfully."
-            )
-        except Exception as exc:
-            # Fallback safe approval & publication
-            story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
-            now = timezone.now()
-            story.status = StoryStatus.PUBLISHED
-            story.published_at = now
-            story.reviewed_by = request.user
-            story.reviewed_at = now
-            story.approved_at = now
-            story.save()
-            cache.delete("homepage")
-            return success_response(
-                data=AdminStorySerializer(story).data,
-                message="Story approved and published live successfully."
-            )
+        return success_response(
+            data=AdminStorySerializer(published_story).data,
+            message="Story approved and published live successfully."
+        )
 
 
 class AdminRejectStoryView(APIView):
@@ -498,23 +442,23 @@ class AdminRejectStoryView(APIView):
 
     def post(self, request, pk):
         story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
-        feedback = request.data.get("rejection_feedback", "Editorial feedback provided.")
-        internal_notes = request.data.get("internal_notes", "")
+        feedback = (
+            request.data.get("rejection_feedback")
+            or request.data.get("feedback")
+            or request.data.get("reason")
+            or ""
+        ).strip()
+        if not feedback:
+            raise ServiceValidationError("Rejection feedback is mandatory when rejecting a story.")
 
-        try:
-            rejected_story = StoryService.reject_story(
-                story,
-                request.user,
-                feedback=feedback,
-                internal_notes=internal_notes
-            )
-        except Exception:
-            story.status = StoryStatus.REJECTED
-            story.rejection_feedback = feedback
-            story.reviewed_by = request.user
-            story.reviewed_at = timezone.now()
-            story.save()
-            rejected_story = story
+        internal_notes = request.data.get("internal_notes", "").strip()
+
+        rejected_story = StoryService.reject_story(
+            story,
+            request.user,
+            feedback=feedback,
+            internal_notes=internal_notes
+        )
 
         cache.delete("homepage")
         return success_response(

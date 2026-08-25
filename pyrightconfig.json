@@ -1,0 +1,14 @@
+{
+  "include": [
+    "."
+  ],
+  "extraPaths": [
+    ".",
+    "./apps"
+  ],
+  "typeCheckingMode": "basic",
+  "reportMissingTypeStubs": false,
+  "reportAttributeAccessIssue": false,
+  "reportGeneralTypeIssues": false,
+  "reportOptionalMemberAccess": false
+}

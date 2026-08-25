@@ -3,7 +3,8 @@ apps/analytics/services.py — Analytics, Trending Engine, and Recommendation Se
 """
 from datetime import timedelta
 from django.utils import timezone
-from django.db.models import Count, Sum
+from django.db.models import Count, Sum, Subquery, OuterRef, IntegerField, Value, Q
+from django.db.models.functions import Coalesce
 from django.core.cache import cache
 
 from apps.stories.models import Story
@@ -34,7 +35,7 @@ class TrendingService:
         days_since_pub = 0
         if story.published_at:
             days_since_pub = max(0, (now - story.published_at).days)
-        recency_bonus = max(0, 100 - (days_since_pub * 10))
+        recency_bonus = max(0.0, 100 - (days_since_pub * 10))
 
         # Verified writer bonus: 20 if verified
         verified_bonus = 20.0 if (story.writer and story.writer.is_verified) else 0.0
@@ -51,21 +52,64 @@ class TrendingService:
 
     @classmethod
     def update_all_trending_scores(cls):
-        """Updates trending scores for all published stories and caches top 10 in Redis."""
-        published_stories = Story.objects.filter(status="PUBLISHED")
-        for story in published_stories:
-            score = cls.calculate_score(story)
-            story.trending_score = score
-            story.save(update_fields=["trending_score"])
+        """
+        Recalculates and updates trending scores for all published stories
+        in bulk (O(5) queries instead of O(N*5)).
+        """
+        now = timezone.now()
+        start_7d = now - timedelta(days=7)
 
-        top = Story.objects.filter(status="PUBLISHED").order_by("-trending_score")[:10]
+        views_sq = (
+            StoryView.objects.filter(story=OuterRef("pk"), viewed_at__gte=start_7d)
+            .values("story").annotate(c=Count("id")).values("c")
+        )
+        likes_sq = (
+            StoryLike.objects.filter(story=OuterRef("pk"), created_at__gte=start_7d)
+            .values("story").annotate(c=Count("id")).values("c")
+        )
+        shares_sq = (
+            StoryShare.objects.filter(story=OuterRef("pk"), shared_at__gte=start_7d)
+            .values("story").annotate(c=Count("id")).values("c")
+        )
+        bookmarks_sq = (
+            StoryBookmark.objects.filter(story=OuterRef("pk"), created_at__gte=start_7d)
+            .values("story").annotate(c=Count("id")).values("c")
+        )
+
+        stories = Story.objects.filter(status="PUBLISHED").select_related("writer").annotate(
+            views_7d=Coalesce(Subquery(views_sq, output_field=IntegerField()), Value(0)),
+            likes_7d=Coalesce(Subquery(likes_sq, output_field=IntegerField()), Value(0)),
+            shares_7d=Coalesce(Subquery(shares_sq, output_field=IntegerField()), Value(0)),
+            bookmarks_7d=Coalesce(Subquery(bookmarks_sq, output_field=IntegerField()), Value(0)),
+        )
+
+        to_update = []
+        for story in stories:
+            days_since_pub = max(0, (now - story.published_at).days) if story.published_at else 0
+            recency_bonus = max(0.0, 100 - (days_since_pub * 10))
+            verified_bonus = 20.0 if (story.writer and story.writer.is_verified) else 0.0
+
+            score = (
+                story.views_7d * 1.0
+                + story.likes_7d * 2.0
+                + story.shares_7d * 3.0
+                + story.bookmarks_7d * 1.5
+                + recency_bonus
+                + verified_bonus
+            )
+            story.trending_score = round(score, 2)
+            to_update.append(story)
+
+        Story.objects.bulk_update(to_update, ["trending_score"], batch_size=200)
+
+        top = Story.objects.filter(status="PUBLISHED").order_by("-trending_score").select_related("writer")[:10]
         top_data = [
             {
                 "id": str(s.id),
                 "title": s.title,
                 "slug": s.slug,
                 "trending_score": float(s.trending_score),
-                "writer_name": s.writer.pen_name,
+                "writer_name": getattr(s.writer, "pen_name", None) or getattr(s.writer, "name", "Tossatale") if s.writer else "Tossatale",
             }
             for s in top
         ]
@@ -147,6 +191,51 @@ class AnalyticsService:
                 "bookmarks": bookmarks_cnt,
             },
         )
+
+    @classmethod
+    def aggregate_all_stories_for_date(cls, date):
+        """
+        Aggregates daily analytics for ALL published stories in ~5 total queries.
+        Replaces iterating aggregate_story_day() N times.
+        """
+        published_stories = list(Story.objects.filter(status="PUBLISHED"))
+
+        views_data = (
+            StoryView.objects.filter(viewed_at__date=date)
+            .values("story_id")
+            .annotate(total=Count("id"), unique=Count("id", filter=Q(is_unique_view=True)))
+        )
+        likes_data = (
+            StoryLike.objects.filter(created_at__date=date)
+            .values("story_id").annotate(total=Count("id"))
+        )
+        shares_data = (
+            StoryShare.objects.filter(shared_at__date=date)
+            .values("story_id").annotate(total=Count("id"))
+        )
+        bookmarks_data = (
+            StoryBookmark.objects.filter(created_at__date=date)
+            .values("story_id").annotate(total=Count("id"))
+        )
+
+        views_map = {r["story_id"]: r for r in views_data}
+        likes_map = {r["story_id"]: r["total"] for r in likes_data}
+        shares_map = {r["story_id"]: r["total"] for r in shares_data}
+        bookmarks_map = {r["story_id"]: r["total"] for r in bookmarks_data}
+
+        for story in published_stories:
+            v = views_map.get(story.id, {})
+            DailyStoryAnalytics.objects.update_or_create(
+                story=story,
+                date=date,
+                defaults={
+                    "views": v.get("total", 0),
+                    "unique_views": v.get("unique", 0),
+                    "likes": likes_map.get(story.id, 0),
+                    "shares": shares_map.get(story.id, 0),
+                    "bookmarks": bookmarks_map.get(story.id, 0),
+                },
+            )
 
     @classmethod
     def aggregate_platform_day(cls, date):

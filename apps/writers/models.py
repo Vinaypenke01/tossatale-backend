@@ -12,6 +12,12 @@ class WriterProfile(BaseModel):
     """
     Writer profile linked to a User account.
     Only Admin can set is_verified per §9 rules.
+
+    ⚠️ MANAGER BEHAVIOR:
+        `WriterProfile.objects`     → ActiveManager (filters is_active=True by default)
+        `WriterProfile.all_objects` → Standard Manager (returns all records including inactive)
+
+    Admin views and background tasks requiring all writer records should use `WriterProfile.all_objects`.
     """
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,

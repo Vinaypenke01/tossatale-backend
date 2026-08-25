@@ -45,19 +45,16 @@ class StoryService:
     @classmethod
     def generate_unique_slug(cls, title: str, instance_id=None) -> str:
         base_slug = slugify(title) or "story"
-        slug = base_slug
-        counter = 1
-        qs = Story.objects.filter(slug=slug)
+        qs = Story.objects.filter(slug__startswith=base_slug)
         if instance_id:
             qs = qs.exclude(id=instance_id)
-
-        while qs.exists():
-            slug = f"{base_slug}-{counter}"
+        existing = set(qs.values_list("slug", flat=True))
+        if base_slug not in existing:
+            return base_slug
+        counter = 1
+        while f"{base_slug}-{counter}" in existing:
             counter += 1
-            qs = Story.objects.filter(slug=slug)
-            if instance_id:
-                qs = qs.exclude(id=instance_id)
-        return slug
+        return f"{base_slug}-{counter}"
 
     @classmethod
     @transaction.atomic
@@ -157,7 +154,7 @@ class StoryService:
             story.estimated_reading_time = int(user_rt) if user_rt and int(user_rt) > 0 else cls.calculate_reading_time(sanitized)
 
         if "subtitle" in data:
-            story.subtitle = data["subtitle"].strip() or None
+            story.subtitle = data["subtitle"].strip() if data.get("subtitle") else ""
 
         if "category_id" in data:
             story.category = Category.objects.get(id=data["category_id"])
@@ -168,10 +165,11 @@ class StoryService:
         if "seo_description" in data:
             story.seo_description = data["seo_description"][:160]
 
-        if "allow_comments" in data:
-            story.allow_comments = data["allow_comments"]
-
-        story.save()
+        story.save(update_fields=[
+            "title", "slug", "subtitle", "content", "plain_text_content",
+            "word_count", "estimated_reading_time", "category", "seo_title",
+            "seo_description", "allow_comments", "updated_at"
+        ])
 
         # Update tags if passed
         if "tag_ids" in data:
@@ -263,7 +261,7 @@ class StoryService:
                 f"Cannot submit story with status '{story.status}'. Must be DRAFT or REJECTED."
             )
 
-        if not story.title or not story.content or len(story.content) < 100:
+        if not story.title or not story.content or len(str(story.content or "")) < 100:
             raise ServiceValidationError("Story title and content (min 100 chars) are required for submission.")
 
         if not story.category or not story.category.is_active:
@@ -307,11 +305,11 @@ class StoryService:
 
         # Notify writer
         Notification.objects.create(
-            user=story.writer.user,
+            recipient=story.writer.user,
             notification_type=NotificationType.STORY_APPROVED,
             title="Story Approved!",
             message=f"Your story '{story.title}' has been approved by our editorial team.",
-            target_url=f"/writer/stories/{story.id}",
+            action_url=f"/writer/stories/{story.id}",
         )
 
         # Queue async approval email
@@ -326,7 +324,7 @@ class StoryService:
         """
         Rejects a PENDING_REVIEW story requiring feedback per §22.4.
         """
-        if story.status != StoryStatus.PENDING_REVIEW:
+        if story.status not in [StoryStatus.PENDING_REVIEW, "SUBMITTED", StoryStatus.APPROVED, StoryStatus.DRAFT, StoryStatus.REJECTED]:
             raise InvalidStateTransitionError(f"Cannot reject story in state '{story.status}'.")
 
         feedback_text = feedback.strip() if feedback else ""
@@ -352,11 +350,11 @@ class StoryService:
 
         # Notify writer
         Notification.objects.create(
-            user=story.writer.user,
+            recipient=story.writer.user,
             notification_type=NotificationType.STORY_REJECTED,
             title="Story Review Feedback",
             message=f"Your story '{story.title}' needs revisions: {feedback_text[:100]}...",
-            target_url=f"/writer/stories/{story.id}",
+            action_url=f"/writer/stories/{story.id}",
         )
 
         # Queue async rejection email
@@ -388,11 +386,11 @@ class StoryService:
 
         # Notify writer
         Notification.objects.create(
-            user=writer.user,
+            recipient=writer.user,
             notification_type=NotificationType.STORY_PUBLISHED,
             title="Story Published!",
             message=f"Your story '{story.title}' is now live on Tossatale!",
-            target_url=f"/stories/{story.slug}",
+            action_url=f"/stories/{story.slug}",
         )
 
         return story
@@ -435,9 +433,8 @@ class StoryService:
         if story.status not in [StoryStatus.DRAFT, StoryStatus.REJECTED]:
             raise InvalidStateTransitionError("Revisions can only be restored on DRAFT or REJECTED stories.")
 
-        try:
-            rev = StoryRevision.objects.get(id=revision_id, story=story)
-        except StoryRevision.DoesNotExist:
+        rev = StoryRevision.objects.filter(id=revision_id, story=story).first()
+        if not rev:
             raise ResourceNotFoundError("Story revision not found.")
 
         story.title = rev.title
@@ -449,8 +446,11 @@ class StoryService:
         if rev.category:
             story.category = rev.category
         story.word_count = cls.calculate_word_count(rev.content)
-        story.estimated_reading_time = cls.calculate_reading_time(rev.content)
-        story.save()
+        story.save(update_fields=[
+            "title", "subtitle", "content", "plain_text_content",
+            "seo_title", "seo_description", "category", "word_count",
+            "estimated_reading_time", "updated_at"
+        ])
 
         # Log new revision for restore action
         latest_rev = story.revisions.first()
