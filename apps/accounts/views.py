@@ -46,7 +46,34 @@ class RegisterView(APIView):
         result = AuthService.register(serializer.validated_data, request=request)
         return created_response(
             data=result,
-            message="Account registered successfully.",
+            message=result.get("message", "Account registered successfully."),
+        )
+
+
+class RegisterVerifyOTPView(APIView):
+    """POST /api/v1/auth/register/verify-otp/ — Verify writer registration OTP"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email", "").strip()
+        otp = request.data.get("otp", "").strip()
+        result = AuthService.verify_registration_otp(email=email, otp=otp, request=request)
+        return success_response(
+            data=result,
+            message="Writer account verified and activated successfully.",
+        )
+
+
+class RegisterResendOTPView(APIView):
+    """POST /api/v1/auth/register/resend-otp/ — Resend writer registration OTP"""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email", "").strip()
+        result = AuthService.resend_registration_otp(email=email)
+        return success_response(
+            data=result,
+            message=result.get("message", "Verification code sent."),
         )
 
 

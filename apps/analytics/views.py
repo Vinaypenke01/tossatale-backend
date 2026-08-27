@@ -53,6 +53,10 @@ class WriterAnalyticsOverviewView(APIView):
         })
 
 
+from django.db.models import Sum, Count, Q
+from common.utils import get_engagement_context
+
+
 class AdminAnalyticsOverviewView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
@@ -60,19 +64,49 @@ class AdminAnalyticsOverviewView(APIView):
         total_stories = Story.objects.filter(status="PUBLISHED").count()
         total_views = Story.objects.aggregate(total=Sum("views_count"))["total"] or 0
         total_likes = Story.objects.aggregate(total=Sum("likes_count"))["total"] or 0
+        total_bookmarks = Story.objects.aggregate(total=Sum("bookmarks_count"))["total"] or 0
+        total_shares = Story.objects.aggregate(total=Sum("shares_count"))["total"] or 0
         total_unauth_likes = Story.objects.aggregate(total=Sum("unauthenticated_like_attempts"))["total"] or 0
         total_writers = WriterProfile.objects.count()
 
-        recent_daily = DailyPlatformAnalytics.objects.all()[:30]
+        # Category readership breakdown
+        from apps.categories.models import Category
+        categories = Category.objects.filter(category_type="STORY", is_active=True).annotate(
+            story_count=Count("stories", filter=Q(stories__status="PUBLISHED")),
+            total_views=Sum("stories__views_count", filter=Q(stories__status="PUBLISHED")),
+            total_likes=Sum("stories__likes_count", filter=Q(stories__status="PUBLISHED"))
+        ).order_by("-total_views")
+
+        category_breakdown = [
+            {
+                "id": str(c.id),
+                "name": c.name,
+                "slug": c.slug,
+                "story_count": c.story_count,
+                "total_views": c.total_views or 0,
+                "total_likes": c.total_likes or 0,
+            }
+            for c in categories if (c.story_count > 0 or (c.total_views or 0) > 0)
+        ]
+
+        context = {"request": request, **get_engagement_context(request)}
+        all_stories_qs = Story.objects.all().select_related("writer", "writer__user", "category").prefetch_related("story_tags__tag", "reviews").order_by("-views_count", "-likes_count")
+
+        recent_daily = DailyPlatformAnalytics.objects.all().order_by("-date")[:30]
 
         data = {
             "platform_summary": {
                 "total_published_stories": total_stories,
                 "total_views": total_views,
                 "total_likes": total_likes,
+                "total_bookmarks": total_bookmarks,
+                "total_shares": total_shares,
                 "total_unauthenticated_like_attempts": total_unauth_likes,
                 "total_writers": total_writers,
             },
+            "category_breakdown": category_breakdown,
+            "all_stories": StoryListSerializer(all_stories_qs, many=True, context=context).data,
+            "top_stories": StoryListSerializer(all_stories_qs.filter(status="PUBLISHED")[:10], many=True, context=context).data,
             "recent_daily_history": [
                 {
                     "date": str(d.date),

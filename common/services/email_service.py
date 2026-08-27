@@ -185,6 +185,103 @@ https://tossatale.com
         )
 
     @staticmethod
+    def send_registration_otp_email(
+        to_email: str,
+        otp_code: str,
+        user_name: str = "Storyteller",
+    ) -> dict:
+        """
+        Send a verification OTP code for activating a new writer registration.
+        """
+        subject = f"Activate Your Tossatale Writer Account: {otp_code}"
+
+        html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Activate Your Tossatale Account</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #0c0d0e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f4f4f5;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #0c0d0e; padding: 40px 15px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" max-width="540px" cellspacing="0" cellpadding="0" border="0" style="max-width: 540px; background-color: #18181b; border: 1px solid #27272a; border-radius: 20px; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
+          
+          <!-- Header -->
+          <tr>
+            <td style="padding: 36px 40px 20px 40px; text-align: center; border-bottom: 1px solid #27272a;">
+              <h1 style="margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.5px; color: #ffffff;">
+                tossatale
+              </h1>
+              <p style="margin: 6px 0 0 0; font-size: 13px; color: #a1a1aa; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600;">
+                Writer Account Activation
+              </p>
+            </td>
+          </tr>
+
+          <!-- Content Body -->
+          <tr>
+            <td style="padding: 36px 40px;">
+              <p style="margin: 0 0 16px 0; font-size: 16px; color: #e4e4e7; line-height: 1.6;">
+                Welcome to Tossatale, {user_name}!
+              </p>
+              <p style="margin: 0 0 28px 0; font-size: 15px; color: #a1a1aa; line-height: 1.6;">
+                Thank you for applying to write on Tossatale. Please enter the 6-digit verification code below to activate your writer account:
+              </p>
+
+              <!-- OTP Code Display Card -->
+              <div style="background-color: #09090b; border: 1px solid #3f3f46; border-radius: 14px; padding: 24px 16px; text-align: center; margin-bottom: 28px;">
+                <span style="font-family: 'Courier New', Courier, monospace; font-size: 38px; font-weight: 800; letter-spacing: 10px; color: #f97316; display: inline-block;">
+                  {otp_code}
+                </span>
+                <p style="margin: 10px 0 0 0; font-size: 12px; color: #71717a; font-weight: 500;">
+                  ⏱ Valid for 10 minutes · Single use only
+                </p>
+              </div>
+
+              <p style="margin: 0 0 12px 0; font-size: 14px; color: #a1a1aa; line-height: 1.6;">
+                If you did not sign up for Tossatale, you can safely disregard this email.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px 40px; background-color: #121215; border-top: 1px solid #27272a; text-align: center;">
+              <p style="margin: 0; font-size: 12px; color: #71717a; line-height: 1.5;">
+                © {2026} Tossatale. Where stories live and breathe.<br>
+                This is an automated account activation transmission.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+        text_content = f"""
+Welcome to Tossatale, {user_name}!
+
+Your writer account activation code is: {otp_code}
+
+This code is valid for 10 minutes. Enter it to activate your account and start writing on Tossatale.
+
+— The Tossatale Team
+https://tossatale.com
+"""
+        return EmailService.send_resend_email(
+            to=to_email,
+            subject=subject,
+            html_content=html_content,
+            text_content=text_content,
+        )
+
+    @staticmethod
     def send_contact_confirmation_email(
         to_email: str,
         sender_name: str,

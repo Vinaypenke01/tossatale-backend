@@ -46,6 +46,44 @@ class PublicBlogDetailView(APIView):
         return success_response(data=BlogSerializer(blog).data)
 
 
+class PublicBlogLikeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        from django.db.models import F
+        blog = get_object_or_404(Blog, slug=slug)
+        Blog.objects.filter(id=blog.id).update(likes_count=F("likes_count") + 1)
+        blog.refresh_from_db(fields=["likes_count"])
+        return success_response(
+            data={"likes_count": blog.likes_count, "is_liked": True},
+            message="Blog post liked successfully."
+        )
+
+    def delete(self, request, slug):
+        from django.db.models import F
+        blog = get_object_or_404(Blog, slug=slug)
+        Blog.objects.filter(id=blog.id, likes_count__gt=0).update(likes_count=F("likes_count") - 1)
+        blog.refresh_from_db(fields=["likes_count"])
+        return success_response(
+            data={"likes_count": blog.likes_count, "is_liked": False},
+            message="Blog like removed successfully."
+        )
+
+
+class PublicBlogViewView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, slug):
+        from django.db.models import F
+        blog = get_object_or_404(Blog, slug=slug)
+        Blog.objects.filter(id=blog.id).update(views_count=F("views_count") + 1)
+        blog.refresh_from_db(fields=["views_count"])
+        return success_response(
+            data={"views_count": blog.views_count},
+            message="Blog view recorded."
+        )
+
+
 class AdminBlogListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
     pagination_class = StandardResultsSetPagination

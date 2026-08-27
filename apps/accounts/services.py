@@ -125,6 +125,33 @@ class AuthService:
         user.last_activity_at = timezone.now()
         user.save(update_fields=["last_activity_at"])
 
+        # If registering as a writer, enforce email OTP verification
+        if role == UserRole.WRITER:
+            import random
+            from django.core.cache import cache
+            from common.services.email_service import EmailService
+
+            otp = f"{random.randint(100000, 999999)}"
+            cache_key = f"reg_otp_{email}"
+            cache.set(cache_key, otp, 600)  # 10 minutes
+
+            try:
+                EmailService.send_registration_otp_email(
+                    to_email=user.email,
+                    otp_code=otp,
+                    user_name=user.first_name or "Storyteller",
+                )
+            except Exception as exc:
+                logger.warning("Failed to send writer registration OTP email to %s: %s", user.email, exc)
+
+            logger.info("Writer registered pending OTP verification: %s", user.email)
+            return {
+                "requires_otp": True,
+                "email": user.email,
+                "role": user.role,
+                "message": "Writer account registered. Please enter the 6-digit verification code sent to your email.",
+            }
+
         tokens = AuthService._generate_token_pair(user)
         AuthService._create_session(user, tokens["refresh"], request)
 
@@ -137,11 +164,92 @@ class AuthService:
         }
 
     @staticmethod
+    def verify_registration_otp(email: str, otp: str, request=None) -> dict:
+        """
+        Verify the 6-digit OTP sent to a newly registered writer.
+        On success, marks email verified, logs them in, and returns JWT tokens.
+        """
+        import logging
+        from django.core.cache import cache
+
+        email = (email or "").strip().lower()
+        otp_clean = str(otp).strip() if otp else ""
+
+        if not email or not otp_clean:
+            raise ServiceValidationError("Email and 6-digit verification code are required.")
+
+        cache_key = f"reg_otp_{email}"
+        cached_otp = cache.get(cache_key)
+
+        if not cached_otp or str(cached_otp).strip() != otp_clean:
+            raise ServiceValidationError("Invalid or expired verification code. Please check the code or request a new one.")
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            raise ServiceValidationError("Account not found.")
+
+        user.is_email_verified = True
+        user.last_activity_at = timezone.now()
+        user.save(update_fields=["is_email_verified", "last_activity_at"])
+
+        cache.delete(cache_key)
+
+        tokens = AuthService._generate_token_pair(user)
+        AuthService._create_session(user, tokens["refresh"], request)
+
+        from apps.accounts.serializers import UserMeSerializer
+        logger.info("Writer email verified & logged in: %s", user.email)
+        return {
+            "access": tokens["access"],
+            "refresh": tokens["refresh"],
+            "user": UserMeSerializer(user).data,
+            "message": "Writer account activated successfully!",
+        }
+
+    @staticmethod
+    def resend_registration_otp(email: str) -> dict:
+        """
+        Resend a fresh 6-digit registration OTP to the writer's email.
+        """
+        import random
+        from django.core.cache import cache
+        from common.services.email_service import EmailService
+
+        email = email.strip().lower()
+        if not email:
+            raise ServiceValidationError("Email address is required.")
+
+        user = User.objects.filter(email__iexact=email).first()
+        if not user:
+            return {"message": f"If an account with {email} exists, an activation code has been sent."}
+
+        if user.is_email_verified:
+            return {"message": "Account is already verified. You can sign in directly."}
+
+        otp = f"{random.randint(100000, 999999)}"
+        cache_key = f"reg_otp_{email}"
+        cache.set(cache_key, otp, 600)  # 10 minutes
+
+        try:
+            EmailService.send_registration_otp_email(
+                to_email=user.email,
+                otp_code=otp,
+                user_name=user.first_name or "Storyteller",
+            )
+        except Exception as exc:
+            logger.warning("Failed to resend registration OTP email: %s", exc)
+
+        return {"message": f"Verification code sent to {email}"}
+
+    @staticmethod
     def email_login(email: str, password: str, request=None) -> dict:
         """
         Authenticate user with email + password.
+        Validates whether writer accounts have completed OTP verification.
         Returns token pair.
         """
+        from common.exceptions import EmailNotVerifiedError
+
         user = authenticate(username=email, password=password)
 
         if user is None:
@@ -158,6 +266,30 @@ class AuthService:
                 "Tossatale is currently under maintenance. Only administrators can log in at this time."
             )
 
+        # Enforce OTP validation for writer registration
+        if user.role == UserRole.WRITER and not user.is_email_verified:
+            # Automatically dispatch a fresh OTP so user can verify immediately
+            import random
+            from django.core.cache import cache
+            from common.services.email_service import EmailService
+
+            otp = f"{random.randint(100000, 999999)}"
+            cache_key = f"reg_otp_{user.email.lower()}"
+            cache.set(cache_key, otp, 600)
+
+            try:
+                EmailService.send_registration_otp_email(
+                    to_email=user.email,
+                    otp_code=otp,
+                    user_name=user.first_name or "Storyteller",
+                )
+            except Exception as exc:
+                logger.warning("Failed to dispatch registration OTP on login: %s", exc)
+
+            raise EmailNotVerifiedError(
+                "Your writer account requires email verification. A 6-digit activation code has been sent to your email."
+            )
+
         # Update last activity
         user.last_activity_at = timezone.now()
         user.save(update_fields=["last_activity_at"])
@@ -165,8 +297,13 @@ class AuthService:
         tokens = AuthService._generate_token_pair(user)
         AuthService._create_session(user, tokens["refresh"], request)
 
+        from apps.accounts.serializers import UserMeSerializer
         logger.info("User logged in: %s", user.email)
-        return tokens
+        return {
+            "access": tokens["access"],
+            "refresh": tokens["refresh"],
+            "user": UserMeSerializer(user).data,
+        }
 
     @staticmethod
     def google_login(id_token: str, request=None) -> dict:
