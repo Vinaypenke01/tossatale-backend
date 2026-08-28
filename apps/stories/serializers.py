@@ -55,8 +55,8 @@ class StoryReviewSerializer(serializers.ModelSerializer):
 class StoryCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=255)
     subtitle = serializers.CharField(max_length=500, required=False, allow_blank=True)
-    content = serializers.CharField(min_length=100, help_text="Story content must be at least 100 characters long.")
-    category_id = serializers.UUIDField()
+    content = serializers.CharField(required=False, allow_blank=True, default="")
+    category_id = serializers.UUIDField(required=False, allow_null=True)
     seo_title = serializers.CharField(max_length=70, required=False, allow_blank=True)
     seo_description = serializers.CharField(max_length=160, required=False, allow_blank=True)
     reading_time = serializers.IntegerField(required=False, allow_null=True)
@@ -67,11 +67,12 @@ class StoryCreateSerializer(serializers.Serializer):
     allow_comments = serializers.BooleanField(default=True)
 
     def validate_category_id(self, value):
-        category = Category.objects.filter(id=value).first()
-        if not category:
-            raise serializers.ValidationError("Category does not exist.")
-        if not category.is_active:
-            raise serializers.ValidationError("Selected category is inactive.")
+        if value:
+            category = Category.objects.filter(id=value).first()
+            if not category:
+                raise serializers.ValidationError("Category does not exist.")
+            if not category.is_active:
+                raise serializers.ValidationError("Selected category is inactive.")
         return value
 
     def validate_tag_ids(self, value):
@@ -84,8 +85,8 @@ class StoryCreateSerializer(serializers.Serializer):
 class StoryUpdateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=255, required=False)
     subtitle = serializers.CharField(max_length=500, required=False, allow_blank=True)
-    content = serializers.CharField(min_length=100, required=False)
-    category_id = serializers.UUIDField(required=False)
+    content = serializers.CharField(required=False, allow_blank=True)
+    category_id = serializers.UUIDField(required=False, allow_null=True)
     seo_title = serializers.CharField(max_length=70, required=False, allow_blank=True)
     seo_description = serializers.CharField(max_length=160, required=False, allow_blank=True)
     reading_time = serializers.IntegerField(required=False, allow_null=True)
@@ -121,8 +122,8 @@ class StoryListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Story
         fields = [
-            "id", "writer", "title", "slug", "subtitle", "category", "tags",
-            "status", "moderation_status", "rejection_feedback", "rejection_count",
+            "id", "writer", "title", "slug", "subtitle", "content", "plain_text_content",
+            "category", "tags", "status", "moderation_status", "rejection_feedback", "rejection_count",
             "reviews", "is_featured", "estimated_reading_time", "word_count",
             "views_count", "likes_count", "bookmarks_count", "is_liked",
             "is_bookmarked", "published_at", "submitted_at", "reviewed_at",

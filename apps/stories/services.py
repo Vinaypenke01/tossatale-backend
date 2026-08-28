@@ -68,15 +68,24 @@ class StoryService:
 
         if not title:
             raise ServiceValidationError("Title is required.")
-        if not content or len(content) < 100:
-            raise ServiceValidationError("Content is required and must be at least 100 characters.")
 
         # Moderation check
         ModerationService.check_content(title)
-        ModerationService.check_content(content)
-        sanitized_content = ModerationService.sanitize_text(content)
+        if content:
+            ModerationService.check_content(content)
+            sanitized_content = ModerationService.sanitize_text(content)
+        else:
+            sanitized_content = ""
 
-        category = Category.objects.get(id=category_id)
+        category = Category.objects.get(id=category_id) if category_id else Category.objects.filter(is_active=True).first()
+        if not category:
+            category = Category.objects.create(
+                name="General",
+                slug="general",
+                description="General stories and essays",
+                category_type="STORY",
+                is_active=True
+            )
         slug = cls.generate_unique_slug(title)
         plain_text = cls.strip_html(sanitized_content)
         word_cnt = cls.calculate_word_count(sanitized_content)
@@ -153,10 +162,11 @@ class StoryService:
 
         if "content" in data:
             content = data["content"].strip()
-            if len(content) < 100:
-                raise ServiceValidationError("Content must be at least 100 characters long.")
-            ModerationService.check_content(content)
-            sanitized = ModerationService.sanitize_text(content)
+            if content:
+                ModerationService.check_content(content)
+                sanitized = ModerationService.sanitize_text(content)
+            else:
+                sanitized = ""
             story.content = sanitized
             story.plain_text_content = cls.strip_html(sanitized)
             story.word_count = cls.calculate_word_count(sanitized)
