@@ -18,7 +18,7 @@ from apps.newsletters.urls import public_urlpatterns as newsletters_public, admi
 from apps.settings_config.urls import public_urlpatterns as settings_public, admin_urlpatterns as settings_admin
 from apps.analytics.urls import writer_urlpatterns as analytics_writer, admin_urlpatterns as analytics_admin
 from apps.audit_logs.urls import admin_urlpatterns as audit_logs_admin
-from apps.categories.views import public_urlpatterns as categories_public, admin_urlpatterns as categories_admin
+from apps.categories.urls import public_urlpatterns as categories_public, admin_urlpatterns as categories_admin
 from apps.writers.urls import public_urlpatterns as writers_public, admin_urlpatterns as writers_admin
 
 urlpatterns = [

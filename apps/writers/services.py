@@ -121,9 +121,12 @@ class WriterService:
                 message="Your writer profile has been verified by the Tossatale team.",
             )
 
-            # Queue verification email
-            from apps.notifications.tasks import send_writer_verification_email
-            send_writer_verification_email.delay(str(profile.user.id))
+            # Send verification email safely
+            try:
+                from apps.notifications.tasks import send_writer_verification_email
+                send_writer_verification_email(str(profile.user.id))
+            except Exception:
+                pass
 
         logger.info("Writer verified: %s by Admin %s", profile.slug, admin_user.email)
         return profile

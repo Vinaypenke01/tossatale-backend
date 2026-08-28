@@ -406,3 +406,60 @@ https://tossatale.com
             subject=subject,
             html_content=html_content,
         )
+
+    @staticmethod
+    def send_newsletter_verification_email(
+        to_email: str,
+        verification_token: str,
+    ) -> dict:
+        """
+        Send double opt-in confirmation email for newsletter subscription.
+        """
+        from django.conf import settings
+        frontend_url = getattr(settings, "FRONTEND_URL", "https://tossatale.com").split(",")[0].strip()
+        verify_link = f"{frontend_url}/api/v1/public/newsletter/verify/?token={verification_token}"
+
+        subject = "Confirm your subscription to the Tossatale Newsletter"
+        html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Confirm Newsletter Subscription</title></head>
+<body style="margin: 0; padding: 0; background-color: #0c0d0e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #f4f4f5;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="padding: 40px 15px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" max-width="540px" cellspacing="0" cellpadding="0" border="0" style="max-width: 540px; background-color: #18181b; border: 1px solid #27272a; border-radius: 20px; padding: 36px 40px;">
+          <tr>
+            <td align="center" style="border-bottom: 1px solid #27272a; padding-bottom: 20px;">
+              <h1 style="margin: 0; font-size: 26px; color: #ffffff;">tossatale</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding-top: 28px;">
+              <p style="margin: 0 0 16px 0; font-size: 16px; color: #e4e4e7;">Hello,</p>
+              <p style="margin: 0 0 20px 0; font-size: 15px; color: #a1a1aa; line-height: 1.6;">
+                Thank you for subscribing to the Tossatale newsletter. Please click the button below to confirm your subscription:
+              </p>
+              <div style="text-align: center; margin: 28px 0;">
+                <a href="{verify_link}" style="background-color: #f97316; color: #ffffff; padding: 12px 24px; text-decoration: none; font-weight: 700; border-radius: 9999px; display: inline-block;">
+                  Confirm Subscription
+                </a>
+              </div>
+              <p style="margin: 0; font-size: 13px; color: #71717a;">
+                If you did not request this subscription, no action is needed.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+        return EmailService.send_resend_email(
+            to=to_email,
+            subject=subject,
+            html_content=html_content,
+        )
+

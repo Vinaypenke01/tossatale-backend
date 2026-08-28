@@ -238,6 +238,36 @@ class AnalyticsService:
             )
 
     @classmethod
+    def aggregate_writer_day(cls, date):
+        """
+        Aggregates daily statistics for all active writers.
+        """
+        for writer in WriterProfile.all_objects.all():
+            story_ids = list(Story.objects.filter(writer=writer).values_list("id", flat=True))
+            if not story_ids:
+                continue
+
+            views = StoryView.objects.filter(story_id__in=story_ids, viewed_at__date=date).count()
+            unique_views = StoryView.objects.filter(story_id__in=story_ids, viewed_at__date=date, is_unique_view=True).count()
+            likes = StoryLike.objects.filter(story_id__in=story_ids, created_at__date=date).count()
+            shares = StoryShare.objects.filter(story_id__in=story_ids, shared_at__date=date).count()
+            submitted = Story.objects.filter(writer=writer, submitted_at__date=date).count()
+            published = Story.objects.filter(writer=writer, published_at__date=date).count()
+
+            DailyWriterAnalytics.objects.update_or_create(
+                writer=writer,
+                date=date,
+                defaults={
+                    "total_views": views,
+                    "total_unique_views": unique_views,
+                    "total_likes": likes,
+                    "total_shares": shares,
+                    "stories_submitted": submitted,
+                    "stories_published": published,
+                },
+            )
+
+    @classmethod
     def aggregate_platform_day(cls, date):
         views = StoryView.objects.filter(viewed_at__date=date).count()
         unique_vis = StoryView.objects.filter(viewed_at__date=date, is_unique_view=True).count()
@@ -253,3 +283,41 @@ class AnalyticsService:
                 "total_likes": likes_cnt,
             },
         )
+
+    @classmethod
+    def reconcile_all_counters(cls):
+        """
+        Recalculates and synchronizes denormalized counters on Story and WriterProfile models.
+        """
+        # 1. Reconcile stories
+        for story in Story.objects.all():
+            v_cnt = StoryView.objects.filter(story=story).count()
+            l_cnt = StoryLike.objects.filter(story=story).count()
+            b_cnt = StoryBookmark.objects.filter(story=story).count()
+            s_cnt = StoryShare.objects.filter(story=story).count()
+
+            story.views_count = v_cnt
+            story.likes_count = l_cnt
+            story.bookmarks_count = b_cnt
+            story.shares_count = s_cnt
+            story.save(update_fields=["views_count", "likes_count", "bookmarks_count", "shares_count"])
+
+        # 2. Reconcile writers
+        for writer in WriterProfile.all_objects.all():
+            stories_qs = Story.objects.filter(writer=writer)
+            total_stories = stories_qs.count()
+            total_published = stories_qs.filter(status="PUBLISHED").count()
+
+            reads = sum(stories_qs.values_list("views_count", flat=True))
+            likes = sum(stories_qs.values_list("likes_count", flat=True))
+            shares = sum(stories_qs.values_list("shares_count", flat=True))
+
+            writer.total_stories = total_stories
+            writer.total_published_stories = total_published
+            writer.total_reads = reads
+            writer.total_likes = likes
+            writer.total_shares = shares
+            writer.save(update_fields=[
+                "total_stories", "total_published_stories", "total_reads", "total_likes", "total_shares"
+            ])
+

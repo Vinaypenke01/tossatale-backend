@@ -134,6 +134,21 @@ class BlogStatus:
     ]
 
 
+class VideoStatus:
+    IN_PRODUCTION = "IN_PRODUCTION"
+    COMPLETED = "COMPLETED"
+    RELEASED = "RELEASED"
+    ARCHIVED = "ARCHIVED"
+
+    CHOICES = [
+        (IN_PRODUCTION, "In Production"),
+        (COMPLETED, "Completed"),
+        (RELEASED, "Released"),
+        (ARCHIVED, "Archived"),
+    ]
+
+
+
 class SharePlatform:
     WHATSAPP = "WHATSAPP"
     FACEBOOK = "FACEBOOK"

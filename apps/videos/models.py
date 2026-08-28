@@ -5,6 +5,7 @@ import uuid
 from django.conf import settings
 from django.db import models
 from django.utils.text import slugify
+from common.constants import VideoStatus
 from common.utils import extract_youtube_id, build_youtube_embed_url
 from apps.categories.models import Category
 
@@ -27,7 +28,12 @@ class Video(models.Model):
     editorial_note = models.TextField(blank=True)
     director = models.CharField(max_length=255, blank=True, default="Tossatale Studio")
     expected_release = models.CharField(max_length=100, blank=True, default="Coming Soon")
-    status = models.CharField(max_length=100, default="In Production")
+    status = models.CharField(
+        max_length=50,
+        choices=VideoStatus.CHOICES,
+        default=VideoStatus.IN_PRODUCTION,
+        db_index=True,
+    )
 
     category = models.ForeignKey(
         Category, on_delete=models.SET_NULL, null=True, blank=True, related_name="videos", db_index=True

@@ -56,8 +56,8 @@ class StoryPipelineTestCase(TestCase):
             "that brought light to the dark corners of the kingdom. " * 3
         )
 
-    @patch("apps.notifications.tasks.send_story_submission_email.delay")
-    def test_create_draft_and_submit_workflow(self, mock_email_delay):
+    @patch("apps.notifications.tasks.send_story_submission_email")
+    def test_create_draft_and_submit_workflow(self, mock_email):
         """Test writer draft creation, revision snapshot, and submission to admin review."""
         data = {
             "title": "The Silent Kingdom",
@@ -79,10 +79,10 @@ class StoryPipelineTestCase(TestCase):
         submitted_story = StoryService.submit_story(story, self.writer)
         self.assertEqual(submitted_story.status, StoryStatus.PENDING_REVIEW)
         self.assertIsNotNone(submitted_story.submitted_at)
-        mock_email_delay.assert_called_once_with(str(submitted_story.id))
+        mock_email.assert_called_once_with(str(submitted_story.id))
 
-    @patch("apps.notifications.tasks.send_story_approval_email.delay")
-    def test_admin_approve_and_publish(self, mock_email_delay):
+    @patch("apps.notifications.tasks.send_story_approval_email")
+    def test_admin_approve_and_publish(self, mock_email):
         """Test admin approval and publishing workflow."""
         data = {
             "title": "Adventures in Code",
@@ -97,7 +97,7 @@ class StoryPipelineTestCase(TestCase):
         self.assertEqual(approved_story.status, StoryStatus.APPROVED)
         self.assertEqual(approved_story.reviewed_by, self.admin_user)
         self.assertEqual(StoryReview.objects.filter(story=story, decision=ReviewDecision.APPROVED).count(), 1)
-        mock_email_delay.assert_called_once_with(str(story.id))
+        mock_email.assert_called_once_with(str(story.id))
 
         # Publish
         published_story = StoryService.publish_story(approved_story, self.admin_user)
@@ -108,8 +108,8 @@ class StoryPipelineTestCase(TestCase):
         self.writer.refresh_from_db()
         self.assertEqual(self.writer.total_published_stories, 1)
 
-    @patch("apps.notifications.tasks.send_story_rejection_email.delay")
-    def test_admin_reject_requires_feedback(self, mock_email_delay):
+    @patch("apps.notifications.tasks.send_story_rejection_email")
+    def test_admin_reject_requires_feedback(self, mock_email):
         """Test admin rejection requires mandatory feedback."""
         data = {
             "title": "Draft to Reject",
@@ -128,7 +128,7 @@ class StoryPipelineTestCase(TestCase):
         rejected_story = StoryService.reject_story(story, self.admin_user, feedback=feedback_msg)
         self.assertEqual(rejected_story.status, StoryStatus.REJECTED)
         self.assertEqual(rejected_story.rejection_feedback, feedback_msg)
-        mock_email_delay.assert_called_once_with(str(story.id))
+        mock_email.assert_called_once_with(str(story.id))
 
         # Writer can re-submit rejected story
         resubmitted_story = StoryService.submit_story(rejected_story, self.writer)
@@ -186,3 +186,27 @@ class StoryPipelineTestCase(TestCase):
         self.assertNotEqual(story.id, cloned.id)
         self.assertEqual(cloned.title, "Original Story (Copy)")
         self.assertEqual(cloned.status, StoryStatus.DRAFT)
+
+    def test_content_moderation_blocked_on_malicious_script(self):
+        """Test that malicious scripts in stories are blocked by moderation."""
+        data = {
+            "title": "Clean Title",
+            "content": "<script>alert('malicious hack payload')</script>" + ("A normal story body. " * 10),
+            "category_id": self.category.id,
+        }
+        story = StoryService.create_story(self.writer, data)
+        with self.assertRaises(ServiceValidationError):
+            StoryService.submit_story(story, self.writer)
+
+    def test_content_moderation_flagged_on_spam_links(self):
+        """Test that stories with high link density are marked FLAGGED on submission."""
+        spam_links = " ".join([f"https://example{i}.com/promo" for i in range(7)])
+        data = {
+            "title": "Story with Multiple Links",
+            "content": f"{spam_links} " + ("An exciting journey through the digital woods. " * 5),
+            "category_id": self.category.id,
+        }
+        story = StoryService.create_story(self.writer, data)
+        submitted = StoryService.submit_story(story, self.writer)
+        self.assertEqual(submitted.moderation_status, "FLAGGED")
+

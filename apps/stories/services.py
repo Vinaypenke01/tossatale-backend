@@ -107,6 +107,7 @@ class StoryService:
             tags = Tag.objects.filter(id__in=tag_ids)
             for tag in tags:
                 StoryTag.objects.create(story=story, tag=tag)
+            cls._sync_tags_usage(tag_ids)
 
         # Save initial revision
         StoryRevision.objects.create(
@@ -123,6 +124,15 @@ class StoryService:
         )
 
         return story
+
+    @staticmethod
+    def _sync_tags_usage(tag_ids=None):
+        """Updates usage_count for affected tags."""
+        if tag_ids:
+            for tag in Tag.objects.filter(id__in=tag_ids):
+                count = StoryTag.objects.filter(tag=tag).count()
+                tag.usage_count = count
+                tag.save(update_fields=["usage_count"])
 
     @classmethod
     @transaction.atomic
@@ -173,10 +183,12 @@ class StoryService:
 
         # Update tags if passed
         if "tag_ids" in data:
+            old_tag_ids = list(story.story_tags.values_list("tag_id", flat=True))
             story.story_tags.all().delete()
             tags = Tag.objects.filter(id__in=data["tag_ids"])
             for tag in tags:
                 StoryTag.objects.create(story=story, tag=tag)
+            cls._sync_tags_usage(list(set(old_tag_ids + list(data["tag_ids"]))))
 
         # Create next revision snapshot
         latest_rev = story.revisions.first()
@@ -202,7 +214,9 @@ class StoryService:
         """Soft/hard delete — only allowed for DRAFT stories."""
         if story.status != StoryStatus.DRAFT:
             raise InvalidStateTransitionError("Only DRAFT stories can be deleted.")
+        tag_ids = list(story.story_tags.values_list("tag_id", flat=True))
         story.delete()
+        cls._sync_tags_usage(tag_ids)
 
     @classmethod
     @transaction.atomic
@@ -252,6 +266,7 @@ class StoryService:
     def submit_story(cls, story: Story, writer) -> Story:
         """
         Transitions story from DRAFT or REJECTED to PENDING_REVIEW per §22.2.
+        Evaluates content moderation status.
         """
         if story.writer_id != writer.id:
             raise PermissionDeniedError("You can only submit your own story.")
@@ -267,14 +282,25 @@ class StoryService:
         if not story.category or not story.category.is_active:
             raise ServiceValidationError("An active category must be selected before submitting.")
 
+        # Automated moderation evaluation
+        mod_result = ModerationService.evaluate_moderation_status(story.title, story.content)
+        if not mod_result["passed"]:
+            story.moderation_status = ModerationStatus.BLOCKED
+            story.save(update_fields=["moderation_status", "updated_at"])
+            raise ServiceValidationError("Story blocked by content moderation: " + "; ".join(mod_result.get("flags", [])))
+
+        story.moderation_status = mod_result["status"]
         story.status = StoryStatus.PENDING_REVIEW
         story.submitted_at = timezone.now()
         story.rejection_feedback = ""  # Clear old feedback
-        story.save(update_fields=["status", "submitted_at", "rejection_feedback", "updated_at"])
+        story.save(update_fields=["status", "moderation_status", "submitted_at", "rejection_feedback", "updated_at"])
 
-        # Queue async email task
-        from apps.notifications.tasks import send_story_submission_email
-        send_story_submission_email.delay(str(story.id))
+        # Synchronous/Safe notification email
+        try:
+            from apps.notifications.tasks import send_story_submission_email
+            send_story_submission_email(str(story.id))
+        except Exception:
+            pass
 
         return story
 
@@ -312,9 +338,12 @@ class StoryService:
             action_url=f"/writer/stories/{story.id}",
         )
 
-        # Queue async approval email
-        from apps.notifications.tasks import send_story_approval_email
-        send_story_approval_email.delay(str(story.id))
+        # Synchronous/Safe approval email
+        try:
+            from apps.notifications.tasks import send_story_approval_email
+            send_story_approval_email(str(story.id))
+        except Exception:
+            pass
 
         return story
 
@@ -352,14 +381,17 @@ class StoryService:
         Notification.objects.create(
             recipient=story.writer.user,
             notification_type=NotificationType.STORY_REJECTED,
-            title="Story Review Feedback",
-            message=f"Your story '{story.title}' needs revisions: {feedback_text[:100]}...",
+            title="Changes Requested / Story Feedback",
+            message=f"Editorial feedback for '{story.title}': {feedback_text}",
             action_url=f"/writer/stories/{story.id}",
         )
 
-        # Queue async rejection email
-        from apps.notifications.tasks import send_story_rejection_email
-        send_story_rejection_email.delay(str(story.id))
+        # Synchronous/Safe rejection email
+        try:
+            from apps.notifications.tasks import send_story_rejection_email
+            send_story_rejection_email(str(story.id))
+        except Exception:
+            pass
 
         return story
 

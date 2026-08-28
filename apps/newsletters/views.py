@@ -14,10 +14,21 @@ from common.exceptions import ServiceValidationError
 from apps.newsletters.models import NewsletterSubscription
 
 
+from django.core.cache import cache
+from common.services.email_service import EmailService
+
+
 class SubscribeNewsletterView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        ip = request.META.get("REMOTE_ADDR", "unknown")
+        cache_key = f"newsletter_sub_rate_{ip}"
+        submissions = cache.get(cache_key, 0)
+
+        if submissions >= 5:
+            raise ServiceValidationError("Maximum subscription attempts reached. Please try again later.")
+
         email = request.data.get("email", "").strip().lower()
         if not email:
             raise ServiceValidationError("Email address is required.")
@@ -31,9 +42,18 @@ class SubscribeNewsletterView(APIView):
             return success_response(message="You are already subscribed to the Tossatale newsletter!")
 
         sub.verification_sent_at = timezone.now()
-        sub.save()
+        sub.save(update_fields=["verification_sent_at", "updated_at"])
+        cache.set(cache_key, submissions + 1, 3600)
 
-        # In production Celery task sends double opt-in email with verification token
+        # Dispatch verification email
+        try:
+            EmailService.send_newsletter_verification_email(
+                to_email=sub.email,
+                verification_token=str(sub.verification_token),
+            )
+        except Exception:
+            pass
+
         verify_url = f"/api/v1/public/newsletter/verify/?token={sub.verification_token}"
 
         return created_response(

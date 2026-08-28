@@ -3,6 +3,7 @@ apps/settings_config/models.py — Site Settings Singleton Model per §19 & Phas
 """
 from django.conf import settings
 from django.db import models
+from common.models import BaseModel, ActiveManager
 
 
 class SiteSettings(models.Model):
@@ -57,7 +58,7 @@ class SiteSettings(models.Model):
         return obj
 
 
-class FAQItem(models.Model):
+class FAQItem(BaseModel):
     """
     FAQ Model storing questions and answers organized by category.
     Configurable by Admin and displayed on the public /faq screen.
@@ -67,8 +68,9 @@ class FAQItem(models.Model):
     answer = models.TextField()
     order = models.IntegerField(default=0, db_index=True)
     is_active = models.BooleanField(default=True, db_index=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = ActiveManager()
+    all_objects = models.Manager()
 
     class Meta:
         db_table = "faq_items"
