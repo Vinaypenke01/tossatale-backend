@@ -22,6 +22,8 @@ class RegisterSerializer(serializers.Serializer):
     role = serializers.CharField(required=False, default="USER")
     bio = serializers.CharField(required=False, allow_blank=True)
     website_url = serializers.URLField(required=False, allow_blank=True)
+    consent = serializers.BooleanField(required=False, default=False)
+    terms_accepted = serializers.BooleanField(required=False, default=False)
 
 
 class LoginSerializer(serializers.Serializer):

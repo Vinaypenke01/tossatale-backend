@@ -67,8 +67,14 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     # Status flags
     is_email_verified = models.BooleanField(default=False)
-    is_active = models.BooleanField(default=True, db_index=True)
+    is_active: bool = models.BooleanField(default=True, db_index=True)  # type: ignore[assignment]
     is_staff = models.BooleanField(default=False)
+
+    # Legal & Consent tracking
+    consent_given = models.BooleanField(default=False)
+    consent_given_at = models.DateTimeField(null=True, blank=True)
+    terms_accepted = models.BooleanField(default=False)
+    terms_accepted_at = models.DateTimeField(null=True, blank=True)
 
     # Activity tracking
     last_activity_at = models.DateTimeField(null=True, blank=True)

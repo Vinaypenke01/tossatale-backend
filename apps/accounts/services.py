@@ -91,6 +91,10 @@ class AuthService:
         # Determine user role
         role = UserRole.WRITER if role_str in ["WRITER", "AUTHOR"] else UserRole.USER
 
+        consent = bool(data.get("consent") or data.get("terms_accepted"))
+        if role == UserRole.WRITER and not consent:
+            raise ServiceValidationError("You must agree to the Terms of Service, Privacy Policy, and Writer Guidelines to register.")
+
         # Enforce maintenance mode — block registrations during maintenance
         from apps.settings_config.models import SiteSettings
         site_settings = SiteSettings.get_solo()
@@ -99,6 +103,7 @@ class AuthService:
                 "Tossatale is currently under maintenance. New registrations are temporarily disabled."
             )
 
+        now = timezone.now()
         with transaction.atomic():
             user = User.objects.create(
                 email=email,
@@ -109,6 +114,10 @@ class AuthService:
                 auth_provider=AuthProvider.EMAIL,
                 is_active=True,
                 is_email_verified=False,
+                consent_given=consent,
+                consent_given_at=now if consent else None,
+                terms_accepted=consent,
+                terms_accepted_at=now if consent else None,
             )
             user.set_password(password)
             user.save()
