@@ -9,10 +9,9 @@ from django.shortcuts import get_object_or_404
 from common.permissions import IsAdmin
 from common.responses import success_response
 from apps.homepage.models import HomepageSection
+from apps.homepage.serializers import HomepageStorySerializer, HomepageBlogSerializer
 from apps.stories.models import Story
-from apps.stories.serializers import StoryListSerializer
 from apps.blogs.models import Blog
-from apps.blogs.serializers import BlogSerializer
 from apps.writers.models import WriterProfile
 from apps.writers.serializers import WriterProfileSerializer
 from apps.videos.models import Video
@@ -57,50 +56,92 @@ class PublicHomepageView(APIView):
             slot_config = story_section_config.config if story_section_config else {}
             payload["story_slots"] = slot_config
 
-            # 1. Featured stories (2 stories)
+            # 1. Featured stories (2 stories) - defer heavy content/plain_text_content
             feat_ids = slot_config.get("featured_story_ids", [])
             if feat_ids and isinstance(feat_ids, list):
-                feat_stories = list(Story.objects.filter(id__in=feat_ids, status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews"))
+                feat_stories = list(
+                    Story.objects.filter(id__in=feat_ids, status="PUBLISHED")
+                    .defer("content", "plain_text_content")
+                    .select_related("writer", "category")
+                    .prefetch_related("story_tags__tag")
+                )
                 feat_dict = {str(s.id): s for s in feat_stories}
                 ordered_feat = [feat_dict[str(sid)] for sid in feat_ids if str(sid) in feat_dict]
                 if ordered_feat:
-                    payload["featured_stories"] = StoryListSerializer(ordered_feat[:2], many=True).data
+                    payload["featured_stories"] = HomepageStorySerializer(ordered_feat[:2], many=True).data
 
             if "featured_stories" not in payload or not payload["featured_stories"]:
-                feat_stories = Story.objects.filter(status="PUBLISHED", is_featured=True).select_related("writer", "category").prefetch_related("story_tags__tag", "reviews")[:2]
+                feat_stories = (
+                    Story.objects.filter(status="PUBLISHED", is_featured=True)
+                    .defer("content", "plain_text_content")
+                    .select_related("writer", "category")
+                    .prefetch_related("story_tags__tag")[:2]
+                )
                 if not feat_stories.exists():
-                    feat_stories = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews")[:2]
-                payload["featured_stories"] = StoryListSerializer(feat_stories, many=True).data
+                    feat_stories = (
+                        Story.objects.filter(status="PUBLISHED")
+                        .defer("content", "plain_text_content")
+                        .select_related("writer", "category")
+                        .prefetch_related("story_tags__tag")[:2]
+                    )
+                payload["featured_stories"] = HomepageStorySerializer(feat_stories, many=True).data
 
-            # 2. Latest stories (3 stories)
+            # 2. Latest stories (3 stories) - defer heavy content/plain_text_content
             latest_ids = slot_config.get("latest_story_ids", [])
             if latest_ids and isinstance(latest_ids, list):
-                latest_stories = list(Story.objects.filter(id__in=latest_ids, status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews"))
+                latest_stories = list(
+                    Story.objects.filter(id__in=latest_ids, status="PUBLISHED")
+                    .defer("content", "plain_text_content")
+                    .select_related("writer", "category")
+                    .prefetch_related("story_tags__tag")
+                )
                 latest_dict = {str(s.id): s for s in latest_stories}
                 ordered_latest = [latest_dict[str(sid)] for sid in latest_ids if str(sid) in latest_dict]
                 if ordered_latest:
-                    payload["latest_stories"] = StoryListSerializer(ordered_latest[:3], many=True).data
+                    payload["latest_stories"] = HomepageStorySerializer(ordered_latest[:3], many=True).data
 
             if "latest_stories" not in payload or not payload["latest_stories"]:
-                latest = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews").order_by("-published_at")[:3]
-                payload["latest_stories"] = StoryListSerializer(latest, many=True).data
+                latest = (
+                    Story.objects.filter(status="PUBLISHED")
+                    .defer("content", "plain_text_content")
+                    .select_related("writer", "category")
+                    .prefetch_related("story_tags__tag")
+                    .order_by("-published_at")[:3]
+                )
+                payload["latest_stories"] = HomepageStorySerializer(latest, many=True).data
 
-            # 3. Trending stories (6 stories)
+            # 3. Trending stories (6 stories) - defer heavy content/plain_text_content
             trending_ids = slot_config.get("trending_story_ids", [])
             if trending_ids and isinstance(trending_ids, list):
-                trending_stories = list(Story.objects.filter(id__in=trending_ids, status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews"))
+                trending_stories = list(
+                    Story.objects.filter(id__in=trending_ids, status="PUBLISHED")
+                    .defer("content", "plain_text_content")
+                    .select_related("writer", "category")
+                    .prefetch_related("story_tags__tag")
+                )
                 trending_dict = {str(s.id): s for s in trending_stories}
                 ordered_trending = [trending_dict[str(sid)] for sid in trending_ids if str(sid) in trending_dict]
                 if ordered_trending:
-                    payload["trending_stories"] = StoryListSerializer(ordered_trending[:6], many=True).data
+                    payload["trending_stories"] = HomepageStorySerializer(ordered_trending[:6], many=True).data
 
             if "trending_stories" not in payload or not payload["trending_stories"]:
-                trending = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews").order_by("-trending_score", "-views_count")[:6]
-                payload["trending_stories"] = StoryListSerializer(trending, many=True).data
+                trending = (
+                    Story.objects.filter(status="PUBLISHED")
+                    .defer("content", "plain_text_content")
+                    .select_related("writer", "category")
+                    .prefetch_related("story_tags__tag")
+                    .order_by("-trending_score", "-views_count")[:6]
+                )
+                payload["trending_stories"] = HomepageStorySerializer(trending, many=True).data
 
-            # Featured/Latest blogs (4 blogs)
-            blogs = Blog.objects.filter(status="PUBLISHED").select_related("category").order_by("-published_at")[:4]
-            payload["featured_blogs"] = BlogSerializer(blogs, many=True).data
+            # Featured/Latest blogs (4 blogs) - lightweight serializer with deferred content
+            blogs = (
+                Blog.objects.filter(status="PUBLISHED")
+                .defer("content", "plain_text_content", "featured_image")
+                .select_related("category")
+                .order_by("-published_at")[:4]
+            )
+            payload["featured_blogs"] = HomepageBlogSerializer(blogs, many=True).data
 
             # Featured writers
             writers = WriterProfile.objects.filter(is_verified=True).order_by("-total_published_stories")[:6]
