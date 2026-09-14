@@ -64,6 +64,13 @@ class EmailNotVerifiedError(APIException):
     default_code = "EMAIL_NOT_VERIFIED"
 
 
+class WriterGoogleAuthBlockedError(APIException):
+    """Raised when a Writer attempts to log in via Google OAuth."""
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = _("Google login is not supported for Writer accounts. Please sign in with your email and password.")
+    default_code = "WRITER_GOOGLE_LOGIN_BLOCKED"
+
+
 class ModerationFailedError(APIException):
     """Raised when content fails moderation checks."""
     status_code = status.HTTP_422_UNPROCESSABLE_ENTITY

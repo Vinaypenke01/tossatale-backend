@@ -133,7 +133,7 @@ class ModerationService:
         })
 
         try:
-            import nh3
+            import nh3  # type: ignore[import-untyped]
             return nh3.clean(
                 text,
                 tags=set(allowed_tags),

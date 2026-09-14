@@ -67,7 +67,7 @@ class AdminAnalyticsOverviewView(APIView):
         total_bookmarks = Story.objects.aggregate(total=Sum("bookmarks_count"))["total"] or 0
         total_shares = Story.objects.aggregate(total=Sum("shares_count"))["total"] or 0
         total_unauth_likes = Story.objects.aggregate(total=Sum("unauthenticated_like_attempts"))["total"] or 0
-        total_writers = WriterProfile.objects.count()
+        total_writers = WriterProfile.objects.filter(is_active=True, is_deleted=False, user__is_active=True).count()
 
         # Category readership breakdown
         from apps.categories.models import Category

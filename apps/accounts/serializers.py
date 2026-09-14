@@ -26,6 +26,34 @@ class RegisterSerializer(serializers.Serializer):
     terms_accepted = serializers.BooleanField(required=False, default=False)
 
 
+class ReaderToWriterUpgradeSerializer(serializers.Serializer):
+    pen_name = serializers.CharField(max_length=150)
+    password = serializers.CharField(write_only=True, min_length=8)
+    bio = serializers.CharField(required=False, allow_blank=True, default="")
+    gender = serializers.CharField(required=False, default="OTHER")
+    confirm_reader_migration = serializers.BooleanField(required=True)
+
+    def validate_confirm_reader_migration(self, value):
+        if not value:
+            raise serializers.ValidationError("You must confirm that your reader account will be converted to a writer account.")
+        return value
+
+
+class ReaderMigrateUnauthenticatedSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    current_password = serializers.CharField(write_only=True)
+    pen_name = serializers.CharField(max_length=150)
+    new_password = serializers.CharField(write_only=True, min_length=8, required=False, allow_blank=True)
+    bio = serializers.CharField(required=False, allow_blank=True, default="")
+    gender = serializers.CharField(required=False, default="OTHER")
+    confirm_reader_migration = serializers.BooleanField(required=True)
+
+    def validate_confirm_reader_migration(self, value):
+        if not value:
+            raise serializers.ValidationError("You must confirm that your reader account will be converted to a writer account.")
+        return value
+
+
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
@@ -54,11 +82,11 @@ class ResetPasswordSerializer(serializers.Serializer):
     new_password = serializers.CharField(write_only=True, min_length=8)
     confirm_password = serializers.CharField(write_only=True)
 
-    def validate(self, data):
-        if data["new_password"] != data["confirm_password"]:
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
             raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
-        validate_password(data["new_password"])
-        return data
+        validate_password(attrs["new_password"])
+        return attrs
 
 
 class TokenPairSerializer(serializers.Serializer):

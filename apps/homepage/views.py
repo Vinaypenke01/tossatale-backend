@@ -85,17 +85,17 @@ class PublicHomepageView(APIView):
                 latest = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews").order_by("-published_at")[:3]
                 payload["latest_stories"] = StoryListSerializer(latest, many=True).data
 
-            # 3. Trending stories (3 stories)
+            # 3. Trending stories (6 stories)
             trending_ids = slot_config.get("trending_story_ids", [])
             if trending_ids and isinstance(trending_ids, list):
                 trending_stories = list(Story.objects.filter(id__in=trending_ids, status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews"))
                 trending_dict = {str(s.id): s for s in trending_stories}
                 ordered_trending = [trending_dict[str(sid)] for sid in trending_ids if str(sid) in trending_dict]
                 if ordered_trending:
-                    payload["trending_stories"] = StoryListSerializer(ordered_trending[:3], many=True).data
+                    payload["trending_stories"] = StoryListSerializer(ordered_trending[:6], many=True).data
 
             if "trending_stories" not in payload or not payload["trending_stories"]:
-                trending = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews").order_by("-trending_score", "-views_count")[:3]
+                trending = Story.objects.filter(status="PUBLISHED").select_related("writer", "category").prefetch_related("story_tags__tag", "reviews").order_by("-trending_score", "-views_count")[:6]
                 payload["trending_stories"] = StoryListSerializer(trending, many=True).data
 
             # Featured/Latest blogs (4 blogs)

@@ -15,7 +15,7 @@ public_urlpatterns = [
 admin_urlpatterns = [
     path("settings/", AdminSettingsView.as_view(), name="admin-settings"),
     path("faqs/", AdminFAQListCreateView.as_view(), name="admin-faqs-list"),
-    path("faqs/<int:pk>/", AdminFAQDetailView.as_view(), name="admin-faqs-detail"),
+    path("faqs/<str:pk>/", AdminFAQDetailView.as_view(), name="admin-faqs-detail"),
 ]
 
 urlpatterns = public_urlpatterns

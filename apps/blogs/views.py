@@ -84,6 +84,42 @@ class PublicBlogViewView(APIView):
         )
 
 
+def _resolve_or_create_category(category_input):
+    if not category_input:
+        return None
+    raw = str(category_input).strip()
+    if not raw:
+        return None
+    try:
+        uuid.UUID(raw)
+        cat = Category.all_objects.filter(id=raw).first()
+        if cat:
+            return cat
+    except (ValueError, TypeError):
+        pass
+
+    cat = Category.all_objects.filter(slug=raw).first()
+    if cat:
+        return cat
+
+    cat = Category.all_objects.filter(name__iexact=raw).first()
+    if cat:
+        return cat
+
+    slug_candidate = slugify(raw) or "blog"
+    base_slug = slug_candidate
+    counter = 1
+    while Category.all_objects.filter(slug=slug_candidate).exists():
+        slug_candidate = f"{base_slug}-{counter}"
+        counter += 1
+    return Category.objects.create(
+        name=raw,
+        slug=slug_candidate,
+        category_type="BLOG",
+        is_active=True
+    )
+
+
 class AdminBlogListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
     pagination_class = StandardResultsSetPagination
@@ -101,19 +137,10 @@ class AdminBlogListCreateView(APIView):
 
         data = serializer.validated_data
         category_id = data.get("category_id")
-        category = None
-
-        if category_id:
-            category = Category.objects.filter(slug=category_id).first()
-            if not category:
-                try:
-                    uuid.UUID(str(category_id))
-                    category = Category.objects.filter(id=category_id).first()
-                except (ValueError, TypeError):
-                    pass
+        category = _resolve_or_create_category(category_id)
 
         if not category:
-            category = Category.objects.first()
+            category = Category.objects.filter(category_type="BLOG").first() or Category.objects.first()
             if not category:
                 category = Category.objects.create(
                     name="General",
@@ -190,16 +217,12 @@ class AdminBlogDetailView(APIView):
         data = serializer.validated_data
 
         if "category_id" in data and data["category_id"]:
-            category_id = data["category_id"]
-            cat = Category.objects.filter(slug=category_id).first()
-            if not cat:
-                try:
-                    uuid.UUID(str(category_id))
-                    cat = Category.objects.filter(id=category_id).first()
-                except (ValueError, TypeError):
-                    pass
+            cat = _resolve_or_create_category(data["category_id"])
             if cat:
                 blog.category = cat
+
+        if "is_featured" in data:
+            blog.is_featured = data["is_featured"]
 
         if "title" in data:
             blog.title = data["title"]

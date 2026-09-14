@@ -135,27 +135,58 @@ class AdminWriterListView(generics.ListAPIView):
     def get_queryset(self):
         return WriterProfile.all_objects.select_related("user").all()
 
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        # Accurate counts across all active writers (not just current page)
+        total_writers = WriterProfile.objects.filter(is_active=True, is_deleted=False).count()
+        total_verified = WriterProfile.objects.filter(is_active=True, is_deleted=False, is_verified=True).count()
+        total_pending = WriterProfile.objects.filter(is_active=True, is_deleted=False, is_verified=False).count()
+
+        from django.utils import timezone
+        import datetime
+        one_week_ago = timezone.now() - datetime.timedelta(days=7)
+        from apps.stories.models import Story
+        from common.constants import StoryStatus
+        published_this_week = Story.objects.filter(
+            status=StoryStatus.PUBLISHED,
+            published_at__gte=one_week_ago
+        ).values("writer_id").distinct().count()
+
+        if isinstance(response.data, dict):
+            response.data["stats"] = {
+                "total_writers": total_writers,
+                "total_verified": total_verified,
+                "total_pending": total_pending,
+                "published_this_week": published_this_week,
+            }
+        return response
+
 
 def _get_writer_profile_by_lookup(lookup):
     """Retrieve WriterProfile by UUID, slug, or user email."""
     import uuid
+    import urllib.parse
+    cleaned = urllib.parse.unquote(str(lookup)).strip()
     try:
-        val = uuid.UUID(str(lookup))
+        val = uuid.UUID(cleaned)
         return WriterProfile.all_objects.select_related("user", "verified_by").get(pk=val)
-    except (ValueError, AttributeError):
+    except Exception:
         pass
 
     try:
-        return WriterProfile.all_objects.select_related("user", "verified_by").get(slug=lookup)
+        return WriterProfile.all_objects.select_related("user", "verified_by").get(slug__iexact=cleaned)
     except WriterProfile.DoesNotExist:
         try:
-            return WriterProfile.all_objects.select_related("user", "verified_by").get(user__email__iexact=lookup)
+            return WriterProfile.all_objects.select_related("user", "verified_by").get(user__email__iexact=cleaned)
         except WriterProfile.DoesNotExist:
-            raise ResourceNotFoundError("Writer not found.")
+            try:
+                return WriterProfile.all_objects.select_related("user", "verified_by").get(id=cleaned)
+            except Exception:
+                raise ResourceNotFoundError("Writer not found.")
 
 
 class AdminWriterDetailView(APIView):
-    """GET/PATCH /api/v1/admin/writers/{lookup}/ (UUID or slug)"""
+    """GET/PATCH/DELETE /api/v1/admin/writers/{lookup}/ (UUID or slug)"""
     permission_classes = [IsAdmin]
 
     def get(self, request, lookup):
@@ -168,6 +199,12 @@ class AdminWriterDetailView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return success_response(data=serializer.data, message="Writer updated.")
+
+    def delete(self, request, lookup):
+        profile = _get_writer_profile_by_lookup(lookup)
+        profile.soft_delete()
+        return success_response(message="Writer deleted successfully.")
+
 
 
 class AdminWriterVerifyView(APIView):

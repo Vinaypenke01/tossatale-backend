@@ -93,6 +93,58 @@ class AdminSettingsView(APIView):
 # FAQ Views (Public & Admin)
 # ──────────────────────────────────────────────────────────────────────────────
 
+DEFAULT_FAQ_SEED = [
+    {
+        "category": "Press & Partnerships",
+        "question": "How do Press & Partnerships work at tossatale?",
+        "answer": "We welcome media inquiries, interviews, brand collaborations, and literary event partnerships. For press kits, interview requests with our founders or writers, or film licensing inquiries, please reach out via our contact page or email press@tossatale.com.",
+        "order": 1,
+    },
+    {
+        "category": "Press & Partnerships",
+        "question": "Can we feature or syndicate tossatale stories?",
+        "answer": "Yes! Selected stories and short films are available for syndication and film festival distribution. Contact our team to discuss licensing and rights management.",
+        "order": 2,
+    },
+    {
+        "category": "Gift Cards",
+        "question": "How do Gift Cards work?",
+        "answer": "tossatale Gift Cards allow you to gift annual or lifetime reading passes to friends and family. Once purchased, a unique digital voucher code is emailed to the recipient, which can be redeemed instantly.",
+        "order": 3,
+    },
+    {
+        "category": "Gift Cards",
+        "question": "How do I redeem a Gift Card code?",
+        "answer": "Log into your tossatale account, navigate to Account Settings > Redeem Voucher, and enter your 16-digit gift card code to unlock your reading membership immediately.",
+        "order": 4,
+    },
+    {
+        "category": "Submissions",
+        "question": "How do I submit a story or manuscript pitch?",
+        "answer": "We read every submission with care. You can submit your pitch through our Contact form under 'Pitching a story' or directly via the Writer Studio. Keep it brief—give us a compelling reason to turn the page!",
+        "order": 5,
+    },
+    {
+        "category": "Submissions",
+        "question": "What genres and story formats do you accept?",
+        "answer": "We publish short fiction, serials, personal essays, creative non-fiction, and short film scripts. We look for authentic voices, depth, and stories that move readers.",
+        "order": 6,
+    },
+    {
+        "category": "Platform",
+        "question": "What makes tossatale different from other platforms?",
+        "answer": "tossatale is built for people who finish what they start. No clickbait, no infinite doom-scroll, no outrage algorithms. Just curated stories, original short films, and quiet reading spaces.",
+        "order": 7,
+    },
+    {
+        "category": "Platform",
+        "question": "Is tossatale free to read?",
+        "answer": "We offer a generous selection of free original stories, blogs, and short films for everyone. Readers can also support writers through membership passes to unlock full archive access.",
+        "order": 8,
+    },
+]
+
+
 class PublicFAQListView(APIView):
     """
     GET /api/v1/public/faqs/ — Returns active FAQs grouped by category.
@@ -100,6 +152,10 @@ class PublicFAQListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
+        if FAQItem.objects.count() == 0:
+            for item in DEFAULT_FAQ_SEED:
+                FAQItem.objects.create(**item)
+
         category = request.query_params.get("category")
         search = request.query_params.get("search")
 
@@ -122,6 +178,10 @@ class AdminFAQListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
+        if FAQItem.objects.count() == 0:
+            for item in DEFAULT_FAQ_SEED:
+                FAQItem.objects.create(**item)
+
         category = request.query_params.get("category")
         qs = FAQItem.objects.all()
         if category and category.lower() != "all":
@@ -153,7 +213,7 @@ class AdminFAQDetailView(APIView):
     def get_object(self, pk):
         try:
             return FAQItem.objects.get(pk=pk)
-        except FAQItem.DoesNotExist:
+        except (FAQItem.DoesNotExist, Exception):
             return None
 
     def get(self, request, pk):
@@ -185,4 +245,5 @@ class AdminFAQDetailView(APIView):
             return error_response(message="FAQ item not found", status_code=status.HTTP_404_NOT_FOUND)
         faq.delete()
         return success_response(message="FAQ item deleted successfully.")
+
 

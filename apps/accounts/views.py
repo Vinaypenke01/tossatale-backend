@@ -17,6 +17,8 @@ from apps.accounts.serializers import (
     LoginSerializer,
     LogoutSerializer,
     NotificationPreferenceSerializer,
+    ReaderToWriterUpgradeSerializer,
+    ReaderMigrateUnauthenticatedSerializer,
     RegisterSerializer,
     ResetPasswordSerializer,
     UserMeSerializer,
@@ -74,6 +76,50 @@ class RegisterResendOTPView(APIView):
         return success_response(
             data=result,
             message=result.get("message", "Verification code sent."),
+        )
+
+
+class ReaderToWriterUpgradeView(APIView):
+    """
+    POST /api/v1/auth/upgrade-to-writer/
+    Allows an authenticated Reader (role=USER) to upgrade to Writer (role=WRITER).
+    Mandatory pen_name, password, and confirm_reader_migration.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = ReaderToWriterUpgradeSerializer
+
+    def post(self, request):
+        serializer = ReaderToWriterUpgradeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = AuthService.upgrade_reader_to_writer(
+            user=request.user,
+            data=serializer.validated_data,
+            request=request,
+        )
+        return success_response(
+            data=result,
+            message=result.get("message", "Account successfully upgraded to Writer."),
+        )
+
+
+class ReaderMigrateUnauthenticatedView(APIView):
+    """
+    POST /api/v1/auth/migrate-reader/
+    Allows a logged-out Reader to authenticate and migrate directly to Writer.
+    """
+    permission_classes = [AllowAny]
+    serializer_class = ReaderMigrateUnauthenticatedSerializer
+
+    def post(self, request):
+        serializer = ReaderMigrateUnauthenticatedSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = AuthService.migrate_reader_credentials(
+            data=serializer.validated_data,
+            request=request,
+        )
+        return success_response(
+            data=result,
+            message=result.get("message", "Account successfully upgraded to Writer."),
         )
 
 

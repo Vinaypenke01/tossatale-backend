@@ -6,6 +6,7 @@ Views must only call these methods per §4.3.
 import hashlib
 import logging
 from datetime import timedelta
+from typing import Any
 
 from django.contrib.auth import authenticate
 from django.conf import settings
@@ -21,6 +22,7 @@ from common.exceptions import (
     InactiveUserError,
     ResourceNotFoundError,
     ServiceValidationError,
+    WriterGoogleAuthBlockedError,
 )
 
 logger = logging.getLogger("apps.accounts")
@@ -104,7 +106,7 @@ class AuthService:
             )
 
         now = timezone.now()
-        with transaction.atomic():
+        with transaction.atomic():  # type: ignore[attr-defined]
             user = User.objects.create(
                 email=email,
                 first_name=first_name,
@@ -182,7 +184,7 @@ class AuthService:
         from django.core.cache import cache
 
         email = (email or "").strip().lower()
-        otp_clean = str(otp).strip() if otp else ""
+        otp_clean = otp.strip() if otp else ""
 
         if not email or not otp_clean:
             raise ServiceValidationError("Email and 6-digit verification code are required.")
@@ -346,11 +348,11 @@ class AuthService:
         if not email:
             raise AuthenticationError("Google account email is not available.")
 
-        with transaction.atomic():
+        with transaction.atomic():  # type: ignore[attr-defined]
             existing_user = User.objects.filter(email=email).first()
             if existing_user:
                 if existing_user.role in [UserRole.WRITER, UserRole.ADMIN]:
-                    raise AuthenticationError(
+                    raise WriterGoogleAuthBlockedError(
                         "Google login is only available for Readers. Writers and Editors/Admins must sign in with their email and password."
                     )
                 user = existing_user
@@ -385,11 +387,13 @@ class AuthService:
         logger.info("Google login: %s (new=%s)", email, created)
         return tokens
 
+    verify_google_token = google_login
+
     @staticmethod
     def refresh_access_token(refresh_token: str) -> dict:
         """Rotate refresh token and return a new access token."""
         try:
-            token = RefreshToken(refresh_token)
+            token = RefreshToken(refresh_token)  # type: ignore[arg-type]
             token.verify()
         except TokenError as exc:
             raise AuthenticationError(str(exc))
@@ -403,7 +407,7 @@ class AuthService:
     def logout(user: User, refresh_token: str) -> None:
         """Blacklist the provided refresh token and revoke its session."""
         try:
-            token = RefreshToken(refresh_token)
+            token = RefreshToken(refresh_token)  # type: ignore[arg-type]
             token.blacklist()
         except TokenError:
             pass  # Already blacklisted — safe to ignore
@@ -437,7 +441,7 @@ class AuthService:
             return
 
         from apps.notifications.tasks import send_password_reset_email
-        send_password_reset_email.delay(str(user.id))
+        send_password_reset_email.delay(str(user.id))  # type: ignore[union-attr]
 
     @staticmethod
     def reset_password(token: str, new_password: str) -> None:
@@ -447,6 +451,119 @@ class AuthService:
         from django.utils.http import urlsafe_base64_decode
 
         raise ServiceValidationError("Password reset via token not yet implemented. Coming in Phase 2.")
+
+    @staticmethod
+    def upgrade_reader_to_writer(user: Any, data: dict, request=None) -> dict:
+        """
+        Migrate an existing Reader account (role == USER) into a Writer account.
+        - Mandatory pen_name
+        - Mandatory password (especially for Google-authenticated readers who have no password)
+        - Creates WriterProfile
+        - Promotes user.role to WRITER
+        - Returns fresh token pair + updated user profile
+        """
+        if user.role != UserRole.USER:
+            if user.role == UserRole.WRITER:
+                raise ServiceValidationError("This account is already registered as a Writer.")
+            raise ServiceValidationError("Only Reader accounts can be upgraded to Writer.")
+
+        pen_name = (data.get("pen_name") or "").strip()
+        if not pen_name:
+            raise ServiceValidationError("Pen Name is required to create your Writer account.")
+
+        password = data.get("password") or ""
+        if not password or len(password) < 8:
+            raise ServiceValidationError("A password of at least 8 characters is required for your Writer account.")
+
+        confirm_migration = bool(data.get("confirm_reader_migration"))
+        if not confirm_migration:
+            raise ServiceValidationError("You must confirm that your reader account will be converted into a writer account.")
+
+        from apps.writers.models import WriterProfile
+        from common.utils import generate_unique_slug
+
+        slug = generate_unique_slug(WriterProfile, pen_name)
+
+        with transaction.atomic():  # type: ignore[attr-defined]
+            # Update user password and credentials
+            user.set_password(password)
+            user.role = UserRole.WRITER
+            user.display_name = pen_name
+            name_parts = pen_name.split(" ", 1)
+            if not user.first_name:
+                user.first_name = name_parts[0]
+            if len(name_parts) > 1 and not user.last_name:
+                user.last_name = name_parts[1]
+            user.terms_accepted = True
+            user.terms_accepted_at = timezone.now()
+            user.is_email_verified = True  # Already verified as reader
+            user.save()
+
+            # Create WriterProfile
+            profile, created = WriterProfile.all_objects.get_or_create(
+                user=user,
+                defaults={
+                    "slug": slug,
+                    "bio": (data.get("bio") or "").strip(),
+                    "gender": data.get("gender", "OTHER"),
+                    "is_active": True,
+                }
+            )
+            # If profile existed but was inactive, reactivate it
+            if not created and not profile.is_active:
+                profile.is_active = True
+                profile.slug = slug
+                profile.save(update_fields=["is_active", "slug"])
+
+        tokens = AuthService._generate_token_pair(user)
+        AuthService._create_session(user, tokens["refresh"], request)
+
+        from apps.accounts.serializers import UserMeSerializer
+        user_data = UserMeSerializer(user).data
+        user_data["writer_profile"] = {
+            "slug": profile.slug,
+            "pen_name": pen_name,
+        }
+
+        logger.info("Reader %s successfully upgraded to Writer (slug=%s)", user.email, slug)
+
+        return {
+            "tokens": tokens,
+            "user": user_data,
+            "message": "Account successfully upgraded to Writer! Welcome to tossatale Writer Studio.",
+            "redirect_url": "/writer",
+        }
+
+    @staticmethod
+    def migrate_reader_credentials(data: dict, request=None) -> dict:
+        """
+        For a logged-out reader who wants to migrate to writer.
+        Takes email, current password, pen_name, new_password, and confirm_reader_migration.
+        """
+        email = (data.get("email") or "").strip().lower()
+        current_password = data.get("current_password") or ""
+        pen_name = (data.get("pen_name") or "").strip()
+        new_password = data.get("new_password") or current_password
+        confirm_migration = bool(data.get("confirm_reader_migration"))
+
+        if not email or not current_password:
+            raise ServiceValidationError("Email and current reader password are required.")
+
+        user = authenticate(request=request, username=email, password=current_password)
+        if not user:
+            raise AuthenticationError("Invalid email or password.")
+
+        return AuthService.upgrade_reader_to_writer(
+            user=user,
+            data={
+                "pen_name": pen_name,
+                "password": new_password,
+                "bio": data.get("bio", ""),
+                "gender": data.get("gender", "OTHER"),
+                "confirm_reader_migration": confirm_migration,
+            },
+            request=request
+        )
 
 
 class UserService:
