@@ -20,7 +20,10 @@ environ.Env.read_env(BASE_DIR / ".env")
 # Security
 # ──────────────────────────────────────────────────────────────────────────────
 SECRET_KEY = env("SECRET_KEY")
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
+ALLOWED_HOSTS = env.list(
+    "ALLOWED_HOSTS",
+    default=["localhost", "127.0.0.1", "api.tossatale.com", "tossatale.com", "www.tossatale.com", ".railway.app"],
+)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Applications
@@ -221,7 +224,7 @@ CORS_ALLOWED_ORIGINS = env.list(
 CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = env.list(
     "CSRF_TRUSTED_ORIGINS",
-    default=["http://localhost:8080", "https://tossatale.com", "https://www.tossatale.com"],
+    default=["http://localhost:8080", "https://tossatale.com", "https://www.tossatale.com", "https://api.tossatale.com"],
 )
 
 # ──────────────────────────────────────────────────────────────────────────────

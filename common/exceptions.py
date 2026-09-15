@@ -108,22 +108,25 @@ def custom_exception_handler(exc, context):
     response = exception_handler(exc, context)
 
     if response is not None:
-        error_code = getattr(exc, "default_code", "ERROR")
-        message = str(exc.detail) if hasattr(exc, "detail") else str(exc)
+        error_code = getattr(exc, "default_code", getattr(response, "status_text", "ERROR"))
+        detail = getattr(exc, "detail", None)
+        message = str(detail) if detail is not None else str(exc)
 
         # Flatten nested detail for serializer errors
         errors = {}
-        if isinstance(exc.detail, dict):
+        if isinstance(detail, dict):
             message = "Validation error."
-            errors = exc.detail
-        elif isinstance(exc.detail, list):
-            message = exc.detail[0] if exc.detail else "An error occurred."
+            errors = detail
+        elif isinstance(detail, list):
+            message = str(detail[0]) if detail else "An error occurred."
+        elif hasattr(response, "data") and isinstance(response.data, dict) and "detail" in response.data:
+            message = str(response.data["detail"])
 
         response.data = {
             "success": False,
             "message": message,
             "errors": errors,
-            "error_code": error_code.upper() if isinstance(error_code, str) else "ERROR",
+            "error_code": str(error_code).upper() if error_code else "ERROR",
         }
 
     return response

@@ -4,7 +4,17 @@ URL Layer: §4.5 — grouped by module, versioned under /api/v1/
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.http import JsonResponse
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+
+def root_health_view(request):
+    return JsonResponse({
+        "status": "healthy",
+        "service": "Tossatale API",
+        "version": "1.0.0",
+        "docs": "/api/docs/",
+        "schema": "/api/schema/",
+    })
 
 from apps.engagements.urls import public_urlpatterns as engagements_public, reader_urlpatterns as engagements_reader
 from apps.series.urls import public_urlpatterns as series_public, admin_urlpatterns as series_admin
@@ -22,6 +32,10 @@ from apps.categories.urls import public_urlpatterns as categories_public, admin_
 from apps.writers.urls import public_urlpatterns as writers_public, admin_urlpatterns as writers_admin
 
 urlpatterns = [
+    # Root Health Check
+    path("", root_health_view, name="root-health"),
+    path("health/", root_health_view, name="health"),
+
     # Django Admin
     path("django-admin/", admin.site.urls),
 
