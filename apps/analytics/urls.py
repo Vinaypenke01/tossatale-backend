@@ -4,12 +4,14 @@ apps/analytics/urls.py — Analytics URL patterns
 from django.urls import path
 from apps.analytics.views import (
     WriterAnalyticsOverviewView,
+    WriterAnalyticsExportCSVView,
     AdminAnalyticsOverviewView,
     AdminAnalyticsExportCSVView,
 )
 
 writer_urlpatterns = [
     path("analytics/overview/", WriterAnalyticsOverviewView.as_view(), name="writer-analytics-overview"),
+    path("analytics/export/", WriterAnalyticsExportCSVView.as_view(), name="writer-analytics-export"),
 ]
 
 admin_urlpatterns = [

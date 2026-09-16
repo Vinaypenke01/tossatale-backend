@@ -21,7 +21,8 @@ class WriterAnalyticsOverviewView(APIView):
     permission_classes = [IsAuthenticated, IsWriter]
 
     def get(self, request):
-        from common.utils import generate_unique_slug
+        from common.utils import generate_unique_slug, get_engagement_context
+        from apps.categories.models import Category
         writer, _ = WriterProfile.objects.get_or_create(
             user=request.user,
             defaults={
@@ -35,22 +36,84 @@ class WriterAnalyticsOverviewView(APIView):
         total_likes = stories.aggregate(total=Sum("likes_count"))["total"] or 0
         total_shares = stories.aggregate(total=Sum("shares_count"))["total"] or 0
         total_bookmarks = stories.aggregate(total=Sum("bookmarks_count"))["total"] or 0
+        total_unauth_likes = stories.aggregate(total=Sum("unauthenticated_like_attempts"))["total"] or 0
 
-        published_stories = stories.filter(status="PUBLISHED").order_by("-views_count")[:10]
+        # Category breakdown for this writer
+        categories = Category.objects.filter(
+            category_type="STORY",
+            stories__writer=writer,
+            is_active=True
+        ).annotate(
+            story_count=Count("stories", filter=Q(stories__writer=writer, stories__status="PUBLISHED")),
+            total_views=Sum("stories__views_count", filter=Q(stories__writer=writer, stories__status="PUBLISHED")),
+            total_likes=Sum("stories__likes_count", filter=Q(stories__writer=writer, stories__status="PUBLISHED"))
+        ).order_by("-total_views")
+
+        category_breakdown = [
+            {
+                "id": str(c.id),
+                "name": c.name,
+                "slug": c.slug,
+                "story_count": c.story_count,
+                "total_views": c.total_views or 0,
+                "total_likes": c.total_likes or 0,
+            }
+            for c in categories if (c.story_count > 0 or (c.total_views or 0) > 0)
+        ]
+
+        context = {"request": request, **get_engagement_context(request)}
+        all_stories_qs = stories.select_related("writer", "writer__user", "category").prefetch_related("story_tags__tag", "reviews").order_by("-views_count", "-likes_count")
+
+        published_stories = all_stories_qs.filter(status="PUBLISHED")
 
         return success_response(data={
             "summary": {
                 "total_stories": stories.count(),
                 "published_stories": stories.filter(status="PUBLISHED").count(),
                 "draft_stories": stories.filter(status="DRAFT").count(),
-                "in_review_stories": stories.filter(status="SUBMITTED").count(),
+                "in_review_stories": stories.filter(Q(status="PENDING_REVIEW") | Q(status="SUBMITTED")).count(),
+                "rejected_stories": stories.filter(status="REJECTED").count(),
                 "total_views": total_views,
                 "total_likes": total_likes,
                 "total_shares": total_shares,
                 "total_bookmarks": total_bookmarks,
+                "total_unauthenticated_like_attempts": total_unauth_likes,
             },
-            "top_stories": StoryListSerializer(published_stories, many=True, context={"request": request}).data,
+            "category_breakdown": category_breakdown,
+            "all_stories": StoryListSerializer(all_stories_qs, many=True, context=context).data,
+            "top_stories": StoryListSerializer(published_stories[:10], many=True, context=context).data,
         })
+
+
+class WriterAnalyticsExportCSVView(APIView):
+    permission_classes = [IsAuthenticated, IsWriter]
+
+    def get(self, request):
+        writer = WriterProfile.objects.filter(user=request.user).first()
+        if not writer:
+            return HttpResponse(status=404)
+
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{writer.slug}_story_analytics.csv"'
+
+        csv_writer = csv.writer(response)
+        csv_writer.writerow(["Title", "Status", "Category", "Views", "Likes", "Bookmarks", "Shares", "Word Count", "Created At"])
+
+        stories = Story.objects.filter(writer=writer).select_related("category").order_by("-created_at")
+        for s in stories:
+            csv_writer.writerow([
+                s.title,
+                s.status,
+                s.category.name if s.category else "General",
+                s.views_count,
+                s.likes_count,
+                s.bookmarks_count,
+                s.shares_count,
+                s.word_count,
+                s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
+            ])
+
+        return response
 
 
 from django.db.models import Sum, Count, Q

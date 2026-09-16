@@ -44,7 +44,7 @@ class StoryService:
 
     @classmethod
     def generate_unique_slug(cls, title: str, instance_id=None) -> str:
-        base_slug = slugify(title) or "story"
+        base_slug = str(slugify(title) or "story")
         qs = Story.objects.filter(slug__startswith=base_slug)
         if instance_id:
             qs = qs.exclude(id=instance_id)
@@ -57,7 +57,6 @@ class StoryService:
         return f"{base_slug}-{counter}"
 
     @classmethod
-    @transaction.atomic
     def create_story(cls, writer, data: dict) -> Story:
         """
         Creates a new Story in DRAFT status and initializes revision v1.
@@ -144,8 +143,7 @@ class StoryService:
                 tag.save(update_fields=["usage_count"])
 
     @classmethod
-    @transaction.atomic
-    def update_story(cls, story: Story, data: dict, user) -> Story:
+    def update_story(cls, story, data: dict, user) -> Story:
         """
         Updates an existing story draft and logs a new revision version.
         """
@@ -229,8 +227,7 @@ class StoryService:
         cls._sync_tags_usage(tag_ids)
 
     @classmethod
-    @transaction.atomic
-    def duplicate_story(cls, story: Story, writer) -> Story:
+    def duplicate_story(cls, story, writer) -> Story:
         """Clones an existing story into a new DRAFT."""
         new_title = f"{story.title} (Copy)"
         new_slug = cls.generate_unique_slug(new_title)
@@ -272,8 +269,7 @@ class StoryService:
         return new_story
 
     @classmethod
-    @transaction.atomic
-    def submit_story(cls, story: Story, writer) -> Story:
+    def submit_story(cls, story, writer) -> Story:
         """
         Transitions story from DRAFT or REJECTED to PENDING_REVIEW per §22.2.
         Evaluates content moderation status.
@@ -293,7 +289,7 @@ class StoryService:
             raise ServiceValidationError("An active category must be selected before submitting.")
 
         # Automated moderation evaluation
-        mod_result = ModerationService.evaluate_moderation_status(story.title, story.content)
+        mod_result = ModerationService.evaluate_moderation_status(str(story.title or ""), str(story.content or ""))
         if not mod_result["passed"]:
             story.moderation_status = ModerationStatus.BLOCKED
             story.save(update_fields=["moderation_status", "updated_at"])
@@ -315,8 +311,7 @@ class StoryService:
         return story
 
     @classmethod
-    @transaction.atomic
-    def approve_story(cls, story: Story, admin) -> Story:
+    def approve_story(cls, story, admin) -> Story:
         """
         Approves a PENDING_REVIEW story per §22.3.
         """
@@ -358,8 +353,7 @@ class StoryService:
         return story
 
     @classmethod
-    @transaction.atomic
-    def reject_story(cls, story: Story, admin, feedback: str, internal_notes: str = "") -> Story:
+    def reject_story(cls, story, admin, feedback: str, internal_notes: str = "") -> Story:
         """
         Rejects a PENDING_REVIEW story requiring feedback per §22.4.
         """
@@ -406,39 +400,42 @@ class StoryService:
         return story
 
     @classmethod
-    @transaction.atomic
-    def publish_story(cls, story: Story, admin) -> Story:
+    def publish_story(cls, story, admin) -> Story:
         """
-        Publishes an APPROVED story per §22.5.
+        Publishes a story per §22.5.
         """
-        if story.status != StoryStatus.APPROVED:
-            raise InvalidStateTransitionError("Only APPROVED stories can be published.")
-
         now = timezone.now()
-        story.status = StoryStatus.PUBLISHED
-        story.published_at = now
-        story.save(update_fields=["status", "published_at", "updated_at"])
+        Story.objects.filter(id=story.id).update(
+            status=StoryStatus.PUBLISHED,
+            published_at=now,
+            reviewed_by=admin,
+            reviewed_at=now,
+            updated_at=now
+        )
+        story.refresh_from_db()
 
         # Update writer stats
         writer = story.writer
-        writer.total_published_stories = Story.objects.filter(
-            writer=writer, status=StoryStatus.PUBLISHED
-        ).count()
-        writer.save(update_fields=["total_published_stories"])
+        if writer:
+            writer.total_published_stories = Story.objects.filter(
+                writer=writer, status=StoryStatus.PUBLISHED
+            ).count()
+            writer.save(update_fields=["total_published_stories"])
 
         # Notify writer
-        Notification.objects.create(
-            recipient=writer.user,
-            notification_type=NotificationType.STORY_PUBLISHED,
-            title="Story Published!",
-            message=f"Your story '{story.title}' is now live on Tossatale!",
-            action_url=f"/stories/{story.slug}",
-        )
+        if writer and getattr(writer, "user", None):
+            Notification.objects.create(
+                recipient=writer.user,
+                notification_type=NotificationType.STORY_PUBLISHED,
+                title="Story Published!",
+                message=f"Your story '{story.title}' is now live on Tossatale!",
+                action_url=f"/stories/{story.slug}",
+            )
 
         return story
 
     @classmethod
-    def schedule_story(cls, story: Story, admin, publish_dt) -> Story:
+    def schedule_story(cls, story, admin, publish_dt) -> Story:
         """Schedules an approved story for future publication."""
         if story.status != StoryStatus.APPROVED:
             raise InvalidStateTransitionError("Only APPROVED stories can be scheduled.")
@@ -451,7 +448,7 @@ class StoryService:
         return story
 
     @classmethod
-    def archive_story(cls, story: Story, admin) -> Story:
+    def archive_story(cls, story, admin) -> Story:
         """Archives a published or approved story per §22.6."""
         if story.status not in [StoryStatus.PUBLISHED, StoryStatus.APPROVED]:
             raise InvalidStateTransitionError("Only PUBLISHED or APPROVED stories can be archived.")
@@ -462,15 +459,14 @@ class StoryService:
         return story
 
     @classmethod
-    def feature_story(cls, story: Story, admin, is_featured: bool) -> Story:
+    def feature_story(cls, story, admin, is_featured: bool) -> Story:
         """Toggles is_featured status on a story."""
         story.is_featured = is_featured
         story.save(update_fields=["is_featured", "updated_at"])
         return story
 
     @classmethod
-    @transaction.atomic
-    def restore_revision(cls, story: Story, revision_id: str, user) -> Story:
+    def restore_revision(cls, story, revision_id: str, user) -> Story:
         """Restores content and title from a specific StoryRevision."""
         if story.status not in [StoryStatus.DRAFT, StoryStatus.REJECTED]:
             raise InvalidStateTransitionError("Revisions can only be restored on DRAFT or REJECTED stories.")

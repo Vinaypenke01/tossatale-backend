@@ -252,12 +252,11 @@ class AdminStoryListView(APIView):
             is_feat = featured_param.lower() in ["true", "1"]
             queryset = queryset.filter(is_featured=is_feat)
         if search_param:
-            queryset = queryset.filter(
-                Q(title__icontains=search_param)
-                | Q(writer__slug__icontains=search_param)
-                | Q(writer__user__first_name__icontains=search_param)
-                | Q(writer__user__display_name__icontains=search_param)
-            )
+            search_query = Q(title__icontains=search_param)
+            search_query.add(Q(writer__slug__icontains=search_param), Q.OR)
+            search_query.add(Q(writer__user__first_name__icontains=search_param), Q.OR)
+            search_query.add(Q(writer__user__display_name__icontains=search_param), Q.OR)
+            queryset = queryset.filter(search_query)
 
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request)
@@ -295,17 +294,7 @@ class AdminStoryListView(APIView):
 
         status_req = request.data.get("status")
         if status_req == StoryStatus.PUBLISHED:
-            now = timezone.now()
-            story.status = StoryStatus.PUBLISHED
-            story.published_at = now
-            story.reviewed_by = request.user
-            story.reviewed_at = now
-            story.save(update_fields=["status", "published_at", "reviewed_by", "reviewed_at", "updated_at"])
-
-            writer.total_published_stories = Story.objects.filter(
-                writer=writer, status=StoryStatus.PUBLISHED
-            ).count()
-            writer.save(update_fields=["total_published_stories"])
+            story = StoryService.publish_story(story, request.user)
 
         return created_response(
             data=AdminStorySerializer(story).data,
@@ -351,12 +340,7 @@ class AdminStoryDetailView(APIView):
 
         status_req = request.data.get("status")
         if status_req == StoryStatus.PUBLISHED and updated_story.status != StoryStatus.PUBLISHED:
-            now = timezone.now()
-            updated_story.status = StoryStatus.PUBLISHED
-            updated_story.published_at = now
-            updated_story.reviewed_by = request.user
-            updated_story.reviewed_at = now
-            updated_story.save(update_fields=["status", "published_at", "reviewed_by", "reviewed_at", "updated_at"])
+            updated_story = StoryService.publish_story(updated_story, request.user)
 
         return success_response(data=AdminStorySerializer(updated_story).data, message="Story updated.")
 
@@ -413,7 +397,24 @@ class AdminReviewQueueView(APIView):
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request)
         serializer = AdminStorySerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        response = paginator.get_paginated_response(serializer.data)
+
+        # Include overall queue statistics
+        stats = {
+            "total_in_queue": Story.objects.filter(
+                Q(status__iexact="PENDING_REVIEW") | Q(status__iexact="SUBMITTED")
+            ).count(),
+            "total_rejected": Story.objects.filter(status__iexact="REJECTED").count(),
+            "total_published": Story.objects.filter(status__iexact="PUBLISHED").count(),
+            "total_submissions": Story.objects.count(),
+        }
+        if isinstance(response.data, dict):
+            if "data" in response.data and isinstance(response.data["data"], dict):
+                response.data["data"]["stats"] = stats
+            else:
+                response.data["stats"] = stats
+
+        return response
 
 
 class AdminApproveStoryView(APIView):
