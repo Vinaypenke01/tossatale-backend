@@ -29,119 +29,118 @@ class EngagementService:
         return hashlib.sha256(ip_address.encode("utf-8")).hexdigest()
 
     @classmethod
-    @transaction.atomic
     def like_story(cls, user, story: Story) -> StoryLike:
         """Likes a story, preventing duplicate likes."""
         if story.status != StoryStatus.PUBLISHED:
             raise ServiceValidationError("Only published stories can be liked.")
 
-        existing = StoryLike.objects.filter(user=user, story=story).first()
-        if existing:
-            return existing
+        with transaction.atomic():  # type: ignore[attr-defined]
+            existing = StoryLike.objects.filter(user=user, story=story).first()
+            if existing:
+                return existing
 
-        like = StoryLike.objects.create(user=user, story=story)
+            like = StoryLike.objects.create(user=user, story=story)
 
-        # Atomic increment counts
-        Story.objects.filter(id=story.id).update(
-            likes_count=F("likes_count") + 1,
-            updated_at=timezone.now()
-        )
-        story.refresh_from_db(fields=["likes_count"])
-
-        if story.writer_id:
-            WriterProfile.objects.filter(id=story.writer_id).update(
-                total_likes=F("total_likes") + 1
+            # Atomic increment counts
+            Story.objects.filter(id=story.id).update(
+                likes_count=F("likes_count") + 1,
+                updated_at=timezone.now()
             )
+            story.refresh_from_db(fields=["likes_count"])
 
-        cache.delete("homepage")
+            if story.writer_id:
+                WriterProfile.objects.filter(id=story.writer_id).update(
+                    total_likes=F("total_likes") + 1
+                )
 
-        return like
+            cache.delete("homepage")
+
+            return like
 
     @classmethod
-    @transaction.atomic
     def unlike_story(cls, user, story: Story):
         """Removes a like from a story."""
-        try:
-            like = StoryLike.objects.get(user=user, story=story)
-        except StoryLike.DoesNotExist:
-            raise ResourceNotFoundError("Like record not found.")
+        with transaction.atomic():  # type: ignore[attr-defined]
+            try:
+                like = StoryLike.objects.get(user=user, story=story)
+            except StoryLike.DoesNotExist:
+                raise ResourceNotFoundError("Like record not found.")
 
-        like.delete()
+            like.delete()
 
-        Story.objects.filter(id=story.id).update(
-            likes_count=F("likes_count") - 1,
-            updated_at=timezone.now()
-        )
-        story.refresh_from_db(fields=["likes_count"])
-
-        if story.writer_id:
-            WriterProfile.objects.filter(id=story.writer_id).update(
-                total_likes=F("total_likes") - 1
+            Story.objects.filter(id=story.id).update(
+                likes_count=F("likes_count") - 1,
+                updated_at=timezone.now()
             )
+            story.refresh_from_db(fields=["likes_count"])
 
-        cache.delete("homepage")
+            if story.writer_id:
+                WriterProfile.objects.filter(id=story.writer_id).update(
+                    total_likes=F("total_likes") - 1
+                )
+
+            cache.delete("homepage")
 
     @classmethod
-    @transaction.atomic
     def bookmark_story(cls, user, story: Story) -> StoryBookmark:
         """Bookmarks a story for a reader."""
         if story.status != StoryStatus.PUBLISHED:
             raise ServiceValidationError("Only published stories can be bookmarked.")
 
-        existing = StoryBookmark.objects.filter(user=user, story=story).first()
-        if existing:
-            return existing
+        with transaction.atomic():  # type: ignore[attr-defined]
+            existing = StoryBookmark.objects.filter(user=user, story=story).first()
+            if existing:
+                return existing
 
-        bookmark = StoryBookmark.objects.create(user=user, story=story)
+            bookmark = StoryBookmark.objects.create(user=user, story=story)
 
-        Story.objects.filter(id=story.id).update(
-            bookmarks_count=F("bookmarks_count") + 1,
-            updated_at=timezone.now()
-        )
-        story.refresh_from_db(fields=["bookmarks_count"])
+            Story.objects.filter(id=story.id).update(
+                bookmarks_count=F("bookmarks_count") + 1,
+                updated_at=timezone.now()
+            )
+            story.refresh_from_db(fields=["bookmarks_count"])
 
-        return bookmark
+            return bookmark
 
     @classmethod
-    @transaction.atomic
     def remove_bookmark(cls, user, story: Story):
         """Removes a bookmarked story."""
-        try:
-            bookmark = StoryBookmark.objects.get(user=user, story=story)
-        except StoryBookmark.DoesNotExist:
-            raise ResourceNotFoundError("Bookmark not found.")
+        with transaction.atomic():  # type: ignore[attr-defined]
+            try:
+                bookmark = StoryBookmark.objects.get(user=user, story=story)
+            except StoryBookmark.DoesNotExist:
+                raise ResourceNotFoundError("Bookmark not found.")
 
-        bookmark.delete()
+            bookmark.delete()
 
-        Story.objects.filter(id=story.id).update(
-            bookmarks_count=F("bookmarks_count") - 1,
-            updated_at=timezone.now()
-        )
-        story.refresh_from_db(fields=["bookmarks_count"])
+            Story.objects.filter(id=story.id).update(
+                bookmarks_count=F("bookmarks_count") - 1,
+                updated_at=timezone.now()
+            )
+            story.refresh_from_db(fields=["bookmarks_count"])
 
     @classmethod
-    @transaction.atomic
     def record_share(cls, story: Story, platform: str, user=None, session_id: str = "", ip_address: str = "") -> StoryShare:
         """Tracks a social share event."""
         ip_h = cls.hash_ip(ip_address)
-        share = StoryShare.objects.create(
-            story=story,
-            user=user if user and user.is_authenticated else None,
-            platform=platform,
-            session_id=session_id,
-            ip_hash=ip_h,
-        )
+        with transaction.atomic():  # type: ignore[attr-defined]
+            share = StoryShare.objects.create(
+                story=story,
+                user=user if user and user.is_authenticated else None,
+                platform=platform,
+                session_id=session_id,
+                ip_hash=ip_h,
+            )
 
-        Story.objects.filter(id=story.id).update(
-            shares_count=F("shares_count") + 1,
-            updated_at=timezone.now()
-        )
-        story.refresh_from_db(fields=["shares_count"])
+            Story.objects.filter(id=story.id).update(
+                shares_count=F("shares_count") + 1,
+                updated_at=timezone.now()
+            )
+            story.refresh_from_db(fields=["shares_count"])
 
-        return share
+            return share
 
     @classmethod
-    @transaction.atomic
     def record_view(
         cls,
         story: Story,
@@ -176,29 +175,30 @@ class EngagementService:
             if query.exists():
                 is_unique = False
 
-        view = StoryView.objects.create(
-            story=story,
-            user=user if user and user.is_authenticated else None,
-            session_id=session_id,
-            ip_hash=ip_h,
-            referrer=referrer[:500],
-            reading_duration=reading_duration,
-            completion_percentage=completion_percentage,
-            is_unique_view=is_unique,
-        )
-
-        # Increment counters ONLY if this is the first view today
-        if is_unique:
-            Story.objects.filter(id=story.id).update(
-                views_count=F("views_count") + 1,
-                updated_at=timezone.now()
+        with transaction.atomic():  # type: ignore[attr-defined]
+            view = StoryView.objects.create(
+                story=story,
+                user=user if user and user.is_authenticated else None,
+                session_id=session_id,
+                ip_hash=ip_h,
+                referrer=referrer[:500],
+                reading_duration=reading_duration,
+                completion_percentage=completion_percentage,
+                is_unique_view=is_unique,
             )
-            story.refresh_from_db(fields=["views_count"])
 
-            if story.writer_id:
-                WriterProfile.objects.filter(id=story.writer_id).update(
-                    total_reads=F("total_reads") + 1
+            # Increment counters ONLY if this is the first view today
+            if is_unique:
+                Story.objects.filter(id=story.id).update(
+                    views_count=F("views_count") + 1,
+                    updated_at=timezone.now()
                 )
+                story.refresh_from_db(fields=["views_count"])
+
+                if story.writer_id:
+                    WriterProfile.objects.filter(id=story.writer_id).update(
+                        total_reads=F("total_reads") + 1
+                    )
 
         # Update reader history if authenticated
         if user and user.is_authenticated:

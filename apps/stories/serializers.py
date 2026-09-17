@@ -3,10 +3,33 @@ apps/stories/serializers.py — Serializers for Story Pipeline
 Implements serializers for story creation, editing, detail views, admin management, and revisions per Phase 2 spec.
 """
 from rest_framework import serializers
-from apps.stories.models import Story, StoryTag, StoryRevision, StoryReview
+from apps.stories.models import Story, StoryTag, StoryRevision, StoryReview, StoryChapter
 from apps.categories.serializers import CategorySerializer, TagSerializer
 from apps.categories.models import Category, Tag
 from apps.writers.serializers import WriterProfileSerializer
+from common.constants import StoryStatus, ReviewDecision, SeriesStatusType
+
+
+class StoryChapterSerializer(serializers.ModelSerializer):
+    story_id = serializers.UUIDField(source="story.id", read_only=True)
+
+    class Meta:
+        model = StoryChapter
+        fields = [
+            "id", "story_id", "order", "title", "content", "plain_text_content",
+            "estimated_reading_time", "word_count", "status", "published_at",
+            "rejection_feedback", "created_at", "updated_at"
+        ]
+        read_only_fields = ["id", "story_id", "plain_text_content", "estimated_reading_time", "word_count", "created_at", "updated_at"]
+
+
+class StoryChapterCreateUpdateSerializer(serializers.Serializer):
+    order = serializers.IntegerField(required=False, min_value=1)
+    title = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    content = serializers.CharField(required=False, allow_blank=True, default="")
+    estimated_reading_time = serializers.IntegerField(required=False, min_value=0)
+    status = serializers.ChoiceField(choices=StoryStatus.CHOICES, required=False)
+    rejection_feedback = serializers.CharField(required=False, allow_blank=True)
 
 
 class StoryTagSerializer(serializers.ModelSerializer):
@@ -56,6 +79,8 @@ class StoryCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=255)
     subtitle = serializers.CharField(max_length=500, required=False, allow_blank=True)
     content = serializers.CharField(required=False, allow_blank=True, default="")
+    is_multi_chapter = serializers.BooleanField(required=False, default=False)
+    series_status = serializers.ChoiceField(choices=SeriesStatusType.CHOICES, required=False, default=SeriesStatusType.ONGOING)
     category_id = serializers.UUIDField(required=False, allow_null=True)
     seo_title = serializers.CharField(max_length=70, required=False, allow_blank=True)
     seo_description = serializers.CharField(max_length=160, required=False, allow_blank=True)
@@ -86,6 +111,8 @@ class StoryUpdateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=255, required=False)
     subtitle = serializers.CharField(max_length=500, required=False, allow_blank=True)
     content = serializers.CharField(required=False, allow_blank=True)
+    is_multi_chapter = serializers.BooleanField(required=False)
+    series_status = serializers.ChoiceField(choices=SeriesStatusType.CHOICES, required=False)
     category_id = serializers.UUIDField(required=False, allow_null=True)
     seo_title = serializers.CharField(max_length=70, required=False, allow_blank=True)
     seo_description = serializers.CharField(max_length=160, required=False, allow_blank=True)
@@ -107,9 +134,6 @@ class StoryUpdateSerializer(serializers.Serializer):
         return value
 
 
-from common.constants import StoryStatus, ReviewDecision
-
-
 class StoryListSerializer(serializers.ModelSerializer):
     writer = WriterProfileSerializer(read_only=True)
     category = CategorySerializer(read_only=True)
@@ -117,6 +141,7 @@ class StoryListSerializer(serializers.ModelSerializer):
     is_liked = serializers.SerializerMethodField()
     is_bookmarked = serializers.SerializerMethodField()
     rejection_count = serializers.SerializerMethodField()
+    chapter_count = serializers.SerializerMethodField()
     reviews = StoryReviewSerializer(many=True, read_only=True)
 
     class Meta:
@@ -124,11 +149,14 @@ class StoryListSerializer(serializers.ModelSerializer):
         fields = [
             "id", "writer", "title", "slug", "subtitle", "content", "plain_text_content",
             "category", "tags", "status", "moderation_status", "rejection_feedback", "rejection_count",
-            "reviews", "is_featured", "estimated_reading_time", "word_count",
+            "is_multi_chapter", "series_status", "chapter_count", "reviews", "is_featured", "estimated_reading_time", "word_count",
             "views_count", "likes_count", "bookmarks_count", "is_liked",
             "is_bookmarked", "published_at", "submitted_at", "reviewed_at",
             "created_at", "updated_at"
         ]
+
+    def get_chapter_count(self, obj):
+        return obj.chapters.count() if obj.is_multi_chapter else 0
 
     def get_rejection_count(self, obj):
         cnt = sum(1 for r in obj.reviews.all() if r.decision == ReviewDecision.REJECTED)
@@ -166,6 +194,8 @@ class StoryDetailSerializer(serializers.ModelSerializer):
     is_liked = serializers.SerializerMethodField()
     is_bookmarked = serializers.SerializerMethodField()
     rejection_count = serializers.SerializerMethodField()
+    chapters = serializers.SerializerMethodField()
+    chapter_count = serializers.SerializerMethodField()
     reviews = StoryReviewSerializer(many=True, read_only=True)
 
     class Meta:
@@ -173,13 +203,41 @@ class StoryDetailSerializer(serializers.ModelSerializer):
         fields = [
             "id", "writer", "title", "slug", "subtitle", "content", "plain_text_content",
             "category", "tags", "seo_title", "seo_description", "status",
-            "moderation_status", "rejection_feedback", "rejection_count", "is_featured",
+            "moderation_status", "rejection_feedback", "rejection_count",
+            "is_multi_chapter", "series_status", "chapter_count", "chapters", "is_featured",
             "allow_comments", "estimated_reading_time", "word_count",
             "views_count", "likes_count", "shares_count", "bookmarks_count",
             "is_liked", "is_bookmarked", "trending_score", "submitted_at",
             "reviewed_at", "approved_at", "published_at", "scheduled_publish_at",
             "reviews", "created_at", "updated_at"
         ]
+
+    def get_chapters(self, obj):
+        if not obj.is_multi_chapter:
+            return []
+        from apps.stories.services import ChapterService
+        ChapterService.normalize_chapter_orders(obj)
+        request = self.context.get("request")
+        is_privileged = (
+            request and hasattr(request, "user") and request.user.is_authenticated
+            and (
+                getattr(request.user, "role", "") == "ADMIN"
+                or getattr(request.user, "is_staff", False)
+                or (getattr(obj, "writer", None) and getattr(obj.writer, "user", None) == request.user)
+            )
+        )
+        if is_privileged:
+            qs = obj.chapters.all().order_by("order", "created_at")
+        else:
+            published_qs = obj.chapters.filter(status=StoryStatus.PUBLISHED).order_by("order", "created_at")
+            if published_qs.exists():
+                qs = published_qs
+            else:
+                qs = obj.chapters.exclude(status=StoryStatus.REJECTED).order_by("order", "created_at")
+        return StoryChapterSerializer(qs, many=True).data
+
+    def get_chapter_count(self, obj):
+        return obj.chapters.count() if obj.is_multi_chapter else 0
 
     def get_rejection_count(self, obj):
         cnt = sum(1 for r in obj.reviews.all() if r.decision == ReviewDecision.REJECTED)
@@ -216,14 +274,17 @@ class AdminStorySerializer(serializers.ModelSerializer):
     reviewed_by_email = serializers.EmailField(source="reviewed_by.email", read_only=True)
     reviews = StoryReviewSerializer(many=True, read_only=True)
     rejection_count = serializers.SerializerMethodField()
+    chapters = StoryChapterSerializer(many=True, read_only=True)
+    chapter_count = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
 
     class Meta:
         model = Story
         fields = [
-            "id", "writer", "created_by", "title", "slug", "subtitle", "content",
+            "id", "writer", "title", "slug", "subtitle", "content",
             "plain_text_content", "category", "tags", "seo_title", "seo_description",
             "status", "moderation_status", "rejection_feedback", "rejection_count",
+            "is_multi_chapter", "series_status", "chapter_count", "chapters",
             "submitted_at", "reviewed_at", "reviewed_by", "reviewed_by_email",
             "approved_at", "published_at", "scheduled_publish_at", "archived_at",
             "is_featured", "allow_comments", "estimated_reading_time", "word_count",
@@ -231,6 +292,9 @@ class AdminStorySerializer(serializers.ModelSerializer):
             "shares_count", "bookmarks_count", "trending_score", "reviews",
             "created_at", "updated_at"
         ]
+
+    def get_chapter_count(self, obj):
+        return obj.chapters.count() if obj.is_multi_chapter else 0
 
     def get_rejection_count(self, obj):
         cnt = sum(1 for r in obj.reviews.all() if r.decision == ReviewDecision.REJECTED)

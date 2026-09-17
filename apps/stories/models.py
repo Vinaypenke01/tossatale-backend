@@ -5,7 +5,7 @@ Implements the core story engine per §11 and Phase 2 spec.
 import uuid
 from django.conf import settings
 from django.db import models
-from common.constants import StoryStatus, ModerationStatus, ReviewDecision
+from common.constants import StoryStatus, ModerationStatus, ReviewDecision, SeriesStatusType
 from apps.writers.models import WriterProfile
 from apps.categories.models import Category, Tag
 
@@ -78,6 +78,14 @@ class Story(models.Model):
     archived_at = models.DateTimeField(null=True, blank=True)
 
     # Flags & Metrics
+    is_multi_chapter = models.BooleanField(default=False, db_index=True, help_text="Whether story is composed of multiple sequential chapters")
+    series_status = models.CharField(
+        max_length=20,
+        choices=SeriesStatusType.CHOICES,
+        default=SeriesStatusType.ONGOING,
+        db_index=True,
+        help_text="Whether this multi-chapter series is actively ongoing or completed",
+    )
     is_featured = models.BooleanField(default=False, db_index=True)
     allow_comments = models.BooleanField(default=True)
     estimated_reading_time = models.PositiveIntegerField(default=0, help_text="Reading time in minutes")
@@ -116,6 +124,38 @@ class Story(models.Model):
 
     def __str__(self):
         return f"{self.title} [{self.status}]"
+
+
+class StoryChapter(models.Model):
+    """
+    Chapter model representing sequential parts of a multi-chapter story.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    story = models.ForeignKey(Story, on_delete=models.CASCADE, related_name="chapters")
+    order = models.PositiveIntegerField(default=1, db_index=True)
+    title = models.CharField(max_length=255, blank=True)
+    content = models.TextField(blank=True, help_text="Rich text prose content of the chapter")
+    plain_text_content = models.TextField(blank=True)
+    estimated_reading_time = models.PositiveIntegerField(default=0, help_text="Reading time in minutes")
+    word_count = models.PositiveIntegerField(default=0)
+    status = models.CharField(
+        max_length=20,
+        choices=StoryStatus.CHOICES,
+        default=StoryStatus.DRAFT,
+        db_index=True,
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
+    rejection_feedback = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "story_chapters"
+        ordering = ["order"]
+        unique_together = ("story", "order")
+
+    def __str__(self):
+        return f"{self.story.title} - Ch.{self.order}: {self.title or 'Untitled'} [{self.status}]"
 
 
 class StoryTag(models.Model):
@@ -179,3 +219,4 @@ class StoryReview(models.Model):
 
     def __str__(self):
         return f"Review({self.story.title}, {self.decision})"
+

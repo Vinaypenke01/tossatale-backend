@@ -52,6 +52,17 @@ class StoryStatus:
     ARCHIVE_FROM = [PUBLISHED, APPROVED]
 
 
+class SeriesStatusType:
+    ONGOING = "ONGOING"
+    COMPLETED = "COMPLETED"
+
+    CHOICES = [
+        (ONGOING, "Ongoing"),
+        (COMPLETED, "Completed"),
+    ]
+
+
+
 class ModerationStatus:
     NOT_REVIEWED = "NOT_REVIEWED"
     PASSED = "PASSED"

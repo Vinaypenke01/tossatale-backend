@@ -2,6 +2,7 @@
 apps/engagements/views.py — Public Story and Reader Dashboard Views
 Implements public story APIs, reader engagements (likes, bookmarks, shares, views), and Reader Dashboard per §27 & §28.
 """
+import uuid
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
@@ -15,7 +16,7 @@ from common.utils import get_engagement_context
 from apps.stories.models import Story
 from apps.writers.models import WriterProfile
 from apps.stories.serializers import StoryListSerializer, StoryDetailSerializer
-from apps.engagements.models import StoryLike, StoryBookmark, RecentlyRead
+from apps.engagements.models import StoryLike, StoryBookmark, StoryView, RecentlyRead
 from apps.engagements.serializers import (
     StoryLikeSerializer,
     StoryBookmarkSerializer,
@@ -24,6 +25,21 @@ from apps.engagements.serializers import (
     RecordShareSerializer,
 )
 from apps.engagements.services import EngagementService
+
+
+def _get_story_by_pk_or_slug(pk, status_filter=None):
+    """Resolves a story by UUID primary key or alphanumeric slug."""
+    qs = Story.objects.all()
+    if status_filter:
+        qs = qs.filter(status=status_filter)
+    try:
+        val = uuid.UUID(str(pk))
+        story = qs.filter(id=val).first()
+        if story:
+            return story
+    except (ValueError, AttributeError):
+        pass
+    return get_object_or_404(qs, slug=pk)
 
 
 # --- Public Story Views ---
@@ -45,11 +61,9 @@ class PublicStoryListView(APIView):
         ordering_param = request.query_params.get("ordering", "-published_at")
 
         if search_param:
-            queryset = queryset.filter(
-                Q(title__icontains=search_param)
-                | Q(subtitle__icontains=search_param)
-                | Q(plain_text_content__icontains=search_param)
-            )
+            search_q = Q(title__icontains=search_param) | Q(subtitle__icontains=search_param)
+            search_q.add(Q(plain_text_content__icontains=search_param), Q.OR)
+            queryset = queryset.filter(search_q)
         if category_param:
             queryset = queryset.filter(
                 Q(category__slug__iexact=category_param) | Q(category__id__iexact=category_param)
@@ -126,7 +140,7 @@ class RecordStoryView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, pk):
-        story = get_object_or_404(Story, pk=pk, status=StoryStatus.PUBLISHED)
+        story = _get_story_by_pk_or_slug(pk, status_filter=StoryStatus.PUBLISHED)
         serializer = RecordViewSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -153,7 +167,7 @@ class RecordStoryShareView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, pk):
-        story = get_object_or_404(Story, pk=pk, status=StoryStatus.PUBLISHED)
+        story = _get_story_by_pk_or_slug(pk, status_filter=StoryStatus.PUBLISHED)
         serializer = RecordShareSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -179,19 +193,43 @@ class ReaderDashboardView(APIView):
     def get(self, request):
         """Fetch reader dashboard summary: recently read, liked stories, bookmarks, statistics."""
         user = request.user
+        context = {"request": request, **get_engagement_context(request)}
 
-        recently_read = RecentlyRead.objects.filter(user=user).select_related("story__writer", "story__category")[:10]
-        liked_stories = StoryLike.objects.filter(user=user).select_related("story__writer", "story__category")[:10]
-        bookmarks = StoryBookmark.objects.filter(user=user).select_related("story__writer", "story__category")[:10]
+        recently_read = RecentlyRead.objects.filter(user=user).select_related("story__writer", "story__category").prefetch_related("story__story_tags__tag", "story__reviews")[:10]
+        liked_stories = StoryLike.objects.filter(user=user).select_related("story__writer", "story__category").prefetch_related("story__story_tags__tag", "story__reviews")[:10]
+        bookmarks = StoryBookmark.objects.filter(user=user).select_related("story__writer", "story__category").prefetch_related("story__story_tags__tag", "story__reviews")[:10]
 
         total_read = RecentlyRead.objects.filter(user=user).count()
+        total_liked = StoryLike.objects.filter(user=user).count()
+        total_bookmarked = StoryBookmark.objects.filter(user=user).count()
+
+        total_duration_secs = StoryView.objects.filter(user=user).aggregate(total=Sum("reading_duration"))["total"] or 0
+        if total_duration_secs > 0:
+            hours_read = round(total_duration_secs / 3600, 1)
+        elif total_read > 0:
+            total_duration_mins = RecentlyRead.objects.filter(user=user).aggregate(total=Sum("story__estimated_reading_time"))["total"] or 0
+            hours_read = round(total_duration_mins / 60, 1)
+        else:
+            hours_read = 0.0
+
+        stats = {
+            "total_stories_read": total_read,
+            "recently_read_count": total_read,
+            "total_liked_stories": total_liked,
+            "total_bookmarked_stories": total_bookmarked,
+            "hours_read": hours_read,
+        }
 
         return success_response(data={
-            "recently_read": RecentlyReadSerializer(recently_read, many=True).data,
-            "liked_stories": StoryLikeSerializer(liked_stories, many=True).data,
-            "bookmarks": StoryBookmarkSerializer(bookmarks, many=True).data,
+            "stats": stats,
+            "recently_read": RecentlyReadSerializer(recently_read, many=True, context=context).data,
+            "liked_stories": StoryLikeSerializer(liked_stories, many=True, context=context).data,
+            "bookmarks": StoryBookmarkSerializer(bookmarks, many=True, context=context).data,
             "reading_statistics": {
                 "total_stories_read": total_read,
+                "total_liked_stories": total_liked,
+                "total_bookmarked_stories": total_bookmarked,
+                "hours_read": hours_read,
             }
         })
 
@@ -200,7 +238,7 @@ class StoryLikeToggleView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
-        story = get_object_or_404(Story, pk=pk)
+        story = _get_story_by_pk_or_slug(pk)
         like = EngagementService.like_story(request.user, story)
         return created_response(
             data={"likes_count": story.likes_count},
@@ -208,7 +246,7 @@ class StoryLikeToggleView(APIView):
         )
 
     def delete(self, request, pk):
-        story = get_object_or_404(Story, pk=pk)
+        story = _get_story_by_pk_or_slug(pk)
         EngagementService.unlike_story(request.user, story)
         return success_response(
             data={"likes_count": story.likes_count},
@@ -221,7 +259,7 @@ class StoryLikeDismissView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, pk):
-        story = get_object_or_404(Story, pk=pk)
+        story = _get_story_by_pk_or_slug(pk)
         attempts = EngagementService.record_unauthenticated_like_attempt(story)
         return success_response(
             data={"unauthenticated_like_attempts": attempts},
@@ -233,7 +271,7 @@ class StoryBookmarkToggleView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
-        story = get_object_or_404(Story, pk=pk)
+        story = _get_story_by_pk_or_slug(pk)
         bookmark = EngagementService.bookmark_story(request.user, story)
         return created_response(
             data={"bookmarks_count": story.bookmarks_count},
@@ -241,7 +279,7 @@ class StoryBookmarkToggleView(APIView):
         )
 
     def delete(self, request, pk):
-        story = get_object_or_404(Story, pk=pk)
+        story = _get_story_by_pk_or_slug(pk)
         EngagementService.remove_bookmark(request.user, story)
         return success_response(
             data={"bookmarks_count": story.bookmarks_count},

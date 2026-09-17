@@ -10,5 +10,8 @@
   "reportMissingTypeStubs": false,
   "reportAttributeAccessIssue": false,
   "reportGeneralTypeIssues": false,
-  "reportOptionalMemberAccess": false
+  "reportOptionalMemberAccess": false,
+  "reportAssignmentType": false,
+  "reportIncompatibleVariableOverride": false,
+  "reportIncompatibleMethodOverride": false
 }

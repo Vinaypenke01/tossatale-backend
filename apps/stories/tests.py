@@ -210,3 +210,231 @@ class StoryPipelineTestCase(TestCase):
         submitted = StoryService.submit_story(story, self.writer)
         self.assertEqual(submitted.moderation_status, "FLAGGED")
 
+    def test_multi_chapter_creation_and_metrics_recalculation(self):
+        """Test creating multiple chapters updates story metrics and ordering."""
+        from apps.stories.services import ChapterService
+        story = StoryService.create_story(self.writer, {
+            "title": "Multi-Chapter Tale",
+            "is_multi_chapter": True,
+            "category_id": self.category.id,
+        })
+        self.assertTrue(story.is_multi_chapter)
+
+        # Add Chapter 1
+        ch1 = ChapterService.create_chapter(story, {
+            "title": "Chapter 1: The Beginning",
+            "content": "Word " * 200,
+        }, self.writer_user)
+        self.assertEqual(ch1.order, 1)
+        self.assertEqual(ch1.word_count, 200)
+        self.assertEqual(ch1.estimated_reading_time, 1)
+
+        # Add Chapter 2
+        ch2 = ChapterService.create_chapter(story, {
+            "title": "Chapter 2: The Journey",
+            "content": "Word " * 400,
+        }, self.writer_user)
+        self.assertEqual(ch2.order, 2)
+        self.assertEqual(ch2.word_count, 400)
+        self.assertEqual(ch2.estimated_reading_time, 2)
+
+        story.refresh_from_db()
+        self.assertEqual(story.word_count, 600)
+        self.assertEqual(story.estimated_reading_time, 3)
+        self.assertEqual(story.chapters.count(), 2)
+
+    def test_delete_chapter_recompacts_ordering(self):
+        """Test deleting a middle chapter shifts subsequent chapters down."""
+        from apps.stories.services import ChapterService
+        story = StoryService.create_story(self.writer, {
+            "title": "Episodic Novella",
+            "is_multi_chapter": True,
+            "category_id": self.category.id,
+        })
+        ch1 = ChapterService.create_chapter(story, {"title": "Part 1", "content": "Text one"}, self.writer_user)
+        ch2 = ChapterService.create_chapter(story, {"title": "Part 2", "content": "Text two"}, self.writer_user)
+        ch3 = ChapterService.create_chapter(story, {"title": "Part 3", "content": "Text three"}, self.writer_user)
+
+        self.assertEqual(list(story.chapters.values_list("order", flat=True)), [1, 2, 3])
+
+        # Delete Chapter 2
+        ChapterService.delete_chapter(ch2, self.writer_user)
+        self.assertEqual(story.chapters.count(), 2)
+
+        remaining_orders = list(story.chapters.order_by("order").values_list("order", flat=True))
+        self.assertEqual(remaining_orders, [1, 2])
+
+        ch3.refresh_from_db()
+        self.assertEqual(ch3.order, 2)
+
+    def test_reorder_chapters(self):
+        """Test bulk reordering chapters."""
+        from apps.stories.services import ChapterService
+        story = StoryService.create_story(self.writer, {
+            "title": "Reorderable Story",
+            "is_multi_chapter": True,
+            "category_id": self.category.id,
+        })
+        ch1 = ChapterService.create_chapter(story, {"title": "Ch 1"}, self.writer_user)
+        ch2 = ChapterService.create_chapter(story, {"title": "Ch 2"}, self.writer_user)
+        ch3 = ChapterService.create_chapter(story, {"title": "Ch 3"}, self.writer_user)
+
+        # Reverse order: [ch3, ch2, ch1]
+        ordered = ChapterService.reorder_chapters(story, [ch3.id, ch2.id, ch1.id], self.writer_user)
+        self.assertEqual(ordered[0].id, ch3.id)
+        self.assertEqual(ordered[0].order, 1)
+        self.assertEqual(ordered[1].id, ch2.id)
+        self.assertEqual(ordered[1].order, 2)
+        self.assertEqual(ordered[2].id, ch1.id)
+        self.assertEqual(ordered[2].order, 3)
+
+    def test_unauthorized_chapter_access_forbidden(self):
+        """Test other writers cannot modify another writer's story chapters."""
+        from apps.stories.services import ChapterService
+        other_user = User.objects.create_writer(
+            email="other@tossatale.com", password="OtherPassword123!", first_name="Other"
+        )
+        story = StoryService.create_story(self.writer, {
+            "title": "Protected Story",
+            "category_id": self.category.id,
+        })
+        with self.assertRaises(PermissionDeniedError):
+            ChapterService.create_chapter(story, {"title": "Hack Chapter"}, other_user)
+
+    def test_writer_cannot_create_two_active_ongoing_series(self):
+        """Test that a writer can only have one active ONGOING series at a time."""
+        from common.constants import SeriesStatusType
+        # 1st active ongoing series
+        series1 = StoryService.create_story(self.writer, {
+            "title": "Series One Ongoing",
+            "is_multi_chapter": True,
+            "series_status": SeriesStatusType.ONGOING,
+            "category_id": self.category.id,
+        })
+        self.assertTrue(series1.is_multi_chapter)
+        self.assertEqual(series1.series_status, SeriesStatusType.ONGOING)
+
+        # Attempting 2nd active series must raise ServiceValidationError
+        with self.assertRaises(ServiceValidationError):
+            StoryService.create_story(self.writer, {
+                "title": "Series Two Ongoing Attempt",
+                "is_multi_chapter": True,
+                "series_status": SeriesStatusType.ONGOING,
+                "category_id": self.category.id,
+            })
+
+    def test_writer_can_create_series_after_completing_previous(self):
+        """Test that completing the current series unlocks creating a new ongoing series."""
+        from common.constants import SeriesStatusType
+        # 1st series
+        series1 = StoryService.create_story(self.writer, {
+            "title": "First Complete Series",
+            "is_multi_chapter": True,
+            "series_status": SeriesStatusType.ONGOING,
+            "category_id": self.category.id,
+        })
+        # Mark as Completed
+        StoryService.toggle_series_status(series1, self.writer_user, new_status=SeriesStatusType.COMPLETED)
+        series1.refresh_from_db()
+        self.assertEqual(series1.series_status, SeriesStatusType.COMPLETED)
+
+        # 2nd series is now allowed
+        series2 = StoryService.create_story(self.writer, {
+            "title": "Second Ongoing Series",
+            "is_multi_chapter": True,
+            "series_status": SeriesStatusType.ONGOING,
+            "category_id": self.category.id,
+        })
+        self.assertTrue(series2.is_multi_chapter)
+        self.assertEqual(series2.series_status, SeriesStatusType.ONGOING)
+
+    def test_submit_and_approve_multi_chapter_series(self):
+        """Test submitting a multi-chapter series for review and admin approval."""
+        from apps.stories.services import ChapterService
+        from common.constants import SeriesStatusType
+        series = StoryService.create_story(self.writer, {
+            "title": "A Multi Chapter Series Saga",
+            "subtitle": "An epic serialized prose tale across five chapters.",
+            "is_multi_chapter": True,
+            "series_status": SeriesStatusType.ONGOING,
+            "category_id": self.category.id,
+        })
+        ChapterService.create_chapter(
+            series,
+            {"title": "Chapter 1: The Beginning", "content": "Once upon a time in a bustling mountain valley, an adventurer began their great voyage through unexplored lands."},
+            self.writer_user
+        )
+
+        submitted = StoryService.submit_story(series, self.writer)
+        self.assertEqual(submitted.status, StoryStatus.PENDING_REVIEW)
+
+        approved = StoryService.approve_story(submitted, self.admin_user)
+        self.assertEqual(approved.status, StoryStatus.APPROVED)
+
+        published = StoryService.publish_story(approved, self.admin_user)
+        self.assertEqual(published.status, StoryStatus.PUBLISHED)
+        self.assertEqual(published.chapters.count(), 1)
+        self.assertEqual(published.chapters.first().status, StoryStatus.PUBLISHED)
+
+    def test_chapter_by_chapter_submission_and_individual_publishing(self):
+        """Test submitting, reviewing, and publishing individual chapters in an ongoing series."""
+        from apps.stories.services import ChapterService
+        from common.constants import SeriesStatusType
+
+        series = StoryService.create_story(self.writer, {
+            "title": "Epic Ongoing Chronicles",
+            "subtitle": "A serial chronicle where chapters publish incrementally.",
+            "is_multi_chapter": True,
+            "series_status": SeriesStatusType.ONGOING,
+            "category_id": self.category.id,
+        })
+
+        # Chapter 1: Created and Submitted
+        ch1 = ChapterService.create_chapter(
+            series,
+            {"title": "Chapter 1", "content": "The hero enters the dark enchanted forest and discovers ancient secrets.", "status": StoryStatus.PENDING_REVIEW},
+            self.writer_user
+        )
+        self.assertEqual(ch1.status, StoryStatus.PENDING_REVIEW)
+        series.refresh_from_db()
+        self.assertEqual(series.status, StoryStatus.PENDING_REVIEW)
+
+        # Admin approves & publishes Chapter 1
+        ChapterService.publish_chapter(ch1, self.admin_user)
+        ch1.refresh_from_db()
+        series.refresh_from_db()
+        self.assertEqual(ch1.status, StoryStatus.PUBLISHED)
+        self.assertEqual(series.status, StoryStatus.PUBLISHED)
+
+        # Chapter 2: Added later in draft, then submitted
+        ch2 = ChapterService.create_chapter(
+            series,
+            {"title": "Chapter 2", "content": "The party reaches the castle gates and prepares for an intense battle.", "status": StoryStatus.DRAFT},
+            self.writer_user
+        )
+        self.assertEqual(ch2.status, StoryStatus.DRAFT)
+
+        # Writer submits Chapter 2 for review
+        ChapterService.submit_chapter(ch2, self.writer_user)
+        ch2.refresh_from_db()
+        self.assertEqual(ch2.status, StoryStatus.PENDING_REVIEW)
+
+        # Admin rejects Chapter 2 with revision feedback
+        ChapterService.reject_chapter(ch2, self.admin_user, feedback="Please polish dialogue in the final scene.")
+        ch2.refresh_from_db()
+        self.assertEqual(ch2.status, StoryStatus.REJECTED)
+        self.assertEqual(ch2.rejection_feedback, "Please polish dialogue in the final scene.")
+        # Series remains published because Chapter 1 is live
+        series.refresh_from_db()
+        self.assertEqual(series.status, StoryStatus.PUBLISHED)
+
+        # Writer updates and resubmits Chapter 2
+        ChapterService.update_chapter(ch2, {"content": "The party reaches the castle gates and talks with the guard commander peacefully.", "status": StoryStatus.PENDING_REVIEW}, self.writer_user)
+        ch2.refresh_from_db()
+        self.assertEqual(ch2.status, StoryStatus.PENDING_REVIEW)
+
+        # Admin publishes Chapter 2
+        ChapterService.publish_chapter(ch2, self.admin_user)
+        ch2.refresh_from_db()
+        self.assertEqual(ch2.status, StoryStatus.PUBLISHED)
+

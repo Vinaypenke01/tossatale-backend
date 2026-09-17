@@ -1,3 +1,4 @@
+# pyright: reportIncompatibleVariableOverride=false
 """
 apps/series/admin.py — Admin registration for Series models
 """
@@ -16,4 +17,4 @@ class StorySeriesAdmin(admin.ModelAdmin):
     list_display = ("title", "writer", "status", "total_stories", "is_featured", "created_at")
     list_filter = ("status", "is_featured")
     search_fields = ("title", "writer__pen_name")
-    inlines = [StorySeriesItemInline]
+    inlines = (StorySeriesItemInline,)

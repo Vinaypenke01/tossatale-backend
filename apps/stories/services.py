@@ -6,16 +6,16 @@ import math
 import re
 from django.utils import timezone
 from django.utils.text import slugify
-from django.db import transaction
+from django.db import models, transaction
 
-from common.constants import StoryStatus, ModerationStatus, ReviewDecision, NotificationType
+from common.constants import StoryStatus, ModerationStatus, ReviewDecision, NotificationType, SeriesStatusType
 from common.exceptions import (
     ServiceValidationError,
     PermissionDeniedError,
     InvalidStateTransitionError,
     ResourceNotFoundError,
 )
-from apps.stories.models import Story, StoryTag, StoryRevision, StoryReview
+from apps.stories.models import Story, StoryTag, StoryRevision, StoryReview, StoryChapter
 from apps.categories.models import Category, Tag
 from apps.moderation.services import ModerationService
 from apps.notifications.models import Notification
@@ -57,6 +57,30 @@ class StoryService:
         return f"{base_slug}-{counter}"
 
     @classmethod
+    def get_active_series_for_writer(cls, writer, exclude_story_id=None):
+        """
+        Returns the writer's currently active ongoing multi-chapter story, if one exists.
+        """
+        qs = Story.objects.filter(
+            writer=writer,
+            is_multi_chapter=True,
+            series_status=SeriesStatusType.ONGOING,
+        ).exclude(status=StoryStatus.ARCHIVED)
+        if exclude_story_id:
+            qs = qs.exclude(id=exclude_story_id)
+        return qs.order_by("-created_at").first()
+
+    @classmethod
+    def get_all_series_for_writer(cls, writer):
+        """
+        Returns all multi-chapter stories authored by the writer ordered by creation.
+        """
+        return Story.objects.filter(
+            writer=writer,
+            is_multi_chapter=True,
+        ).exclude(status=StoryStatus.ARCHIVED).prefetch_related("chapters").order_by("-created_at")
+
+    @classmethod
     def create_story(cls, writer, data: dict) -> Story:
         """
         Creates a new Story in DRAFT status and initializes revision v1.
@@ -64,6 +88,16 @@ class StoryService:
         title = data.get("title", "").strip()
         content = data.get("content", "").strip()
         category_id = data.get("category_id")
+        is_multi = bool(data.get("is_multi_chapter", False))
+        series_stat = data.get("series_status", SeriesStatusType.ONGOING)
+
+        if is_multi and series_stat == SeriesStatusType.ONGOING:
+            active_series = cls.get_active_series_for_writer(writer)
+            if active_series:
+                raise ServiceValidationError(
+                    f"You already have an active series in progress: '{active_series.title}'. "
+                    f"Please mark it as Completed before starting a new series."
+                )
 
         if not title:
             raise ServiceValidationError("Title is required.")
@@ -99,6 +133,8 @@ class StoryService:
             subtitle=data.get("subtitle", "").strip() or None,
             content=sanitized_content,
             plain_text_content=plain_text,
+            is_multi_chapter=is_multi,
+            series_status=series_stat,
             category=category,
             seo_title=data.get("seo_title", "")[:70],
             seo_description=data.get("seo_description", "")[:160],
@@ -171,6 +207,29 @@ class StoryService:
             user_rt = data.get("reading_time") or data.get("estimated_reading_time")
             story.estimated_reading_time = int(user_rt) if user_rt and int(user_rt) > 0 else cls.calculate_reading_time(sanitized)
 
+        if "is_multi_chapter" in data:
+            new_is_multi = bool(data["is_multi_chapter"])
+            new_series_stat = data.get("series_status", story.series_status)
+            if new_is_multi and new_series_stat == SeriesStatusType.ONGOING:
+                active_series = cls.get_active_series_for_writer(story.writer, exclude_story_id=story.id)
+                if active_series:
+                    raise ServiceValidationError(
+                        f"You already have an active series in progress: '{active_series.title}'. "
+                        f"Please mark it as Completed before starting a new series."
+                    )
+            story.is_multi_chapter = new_is_multi
+
+        if "series_status" in data:
+            new_stat = data["series_status"]
+            if new_stat == SeriesStatusType.ONGOING and story.series_status != SeriesStatusType.ONGOING:
+                active_series = cls.get_active_series_for_writer(story.writer, exclude_story_id=story.id)
+                if active_series:
+                    raise ServiceValidationError(
+                        f"You already have an active series in progress: '{active_series.title}'. "
+                        f"Please complete your ongoing series before reopening this series."
+                    )
+            story.series_status = new_stat
+
         if "subtitle" in data:
             story.subtitle = data["subtitle"].strip() if data.get("subtitle") else ""
 
@@ -185,7 +244,7 @@ class StoryService:
 
         story.save(update_fields=[
             "title", "slug", "subtitle", "content", "plain_text_content",
-            "word_count", "estimated_reading_time", "category", "seo_title",
+            "word_count", "estimated_reading_time", "is_multi_chapter", "category", "seo_title",
             "seo_description", "allow_comments", "updated_at"
         ])
 
@@ -282,14 +341,27 @@ class StoryService:
                 f"Cannot submit story with status '{story.status}'. Must be DRAFT or REJECTED."
             )
 
-        if not story.title or not story.content or len(str(story.content or "")) < 100:
-            raise ServiceValidationError("Story title and content (min 100 chars) are required for submission.")
+        if not story.title:
+            raise ServiceValidationError("Story title is required for submission.")
+
+        if story.is_multi_chapter:
+            chapters = list(story.chapters.all())
+            if not chapters:
+                raise ServiceValidationError("Please write and save at least one chapter before submitting your series.")
+            combined_chapter_content = " ".join([c.content for c in chapters if c.content])
+            if len(combined_chapter_content.strip()) < 50:
+                raise ServiceValidationError("At least one chapter must contain prose content before submitting for review.")
+            eval_content = f"{story.subtitle or ''} {combined_chapter_content}"
+        else:
+            if not story.content or len(str(story.content or "")) < 100:
+                raise ServiceValidationError("Story title and content (min 100 chars) are required for submission.")
+            eval_content = str(story.content)
 
         if not story.category or not story.category.is_active:
             raise ServiceValidationError("An active category must be selected before submitting.")
 
         # Automated moderation evaluation
-        mod_result = ModerationService.evaluate_moderation_status(str(story.title or ""), str(story.content or ""))
+        mod_result = ModerationService.evaluate_moderation_status(str(story.title or ""), eval_content)
         if not mod_result["passed"]:
             story.moderation_status = ModerationStatus.BLOCKED
             story.save(update_fields=["moderation_status", "updated_at"])
@@ -507,3 +579,261 @@ class StoryService:
         )
 
         return story
+
+    @classmethod
+    def toggle_series_status(cls, story: Story, user, new_status: str | None = None) -> Story:
+        """Toggles or sets the series status (ONGOING <-> COMPLETED)."""
+        if story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+            raise PermissionDeniedError("You do not have permission to modify this series status.")
+
+        target_status = new_status or (
+            SeriesStatusType.COMPLETED if story.series_status == SeriesStatusType.ONGOING else SeriesStatusType.ONGOING
+        )
+
+        if target_status == SeriesStatusType.ONGOING:
+            active_series = cls.get_active_series_for_writer(story.writer, exclude_story_id=story.id)
+            if active_series:
+                raise ServiceValidationError(
+                    f"Cannot set series to Ongoing. You already have an active series in progress: '{active_series.title}'."
+                )
+
+        setattr(story, "series_status", target_status)
+        story.save(update_fields=["series_status", "updated_at"])
+        return story
+
+
+class ChapterService:
+
+    @classmethod
+    def normalize_chapter_orders(cls, story) -> list:
+        """Ensures all chapters for a story have sequential 1..N order without gaps or shifts."""
+        chapters = list(story.chapters.all().order_by("order", "created_at"))
+        if not chapters:
+            return []
+        needs_update = any(ch.order != i + 1 for i, ch in enumerate(chapters))
+        if needs_update:
+            with transaction.atomic():  # type: ignore[attr-defined]
+                for i, ch in enumerate(chapters):
+                    StoryChapter.objects.filter(id=ch.id).update(order=10000 + i)
+                for i, ch in enumerate(chapters):
+                    StoryChapter.objects.filter(id=ch.id).update(order=i + 1)
+            chapters = list(story.chapters.all().order_by("order", "created_at"))
+        return chapters
+
+    @classmethod
+    def recalculate_story_metrics(cls, story) -> None:
+        """Aggregates word count, reading time and chapter count from chapters up to the Story parent."""
+        cls.normalize_chapter_orders(story)
+        chapters = story.chapters.all()
+        total_words = sum(c.word_count for c in chapters)
+        total_reading_time = sum(c.estimated_reading_time for c in chapters)
+        chapter_count = chapters.count()
+
+        Story.objects.filter(id=story.id).update(
+            word_count=total_words,
+            estimated_reading_time=total_reading_time,
+            chapter_count=chapter_count,
+            is_multi_chapter=True,
+            updated_at=timezone.now(),
+        )
+
+    @classmethod
+    def create_chapter(cls, story, data: dict, user) -> StoryChapter:
+        """Creates a chapter under a multi-chapter story."""
+        if story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+            raise PermissionDeniedError("You do not have permission to add chapters to this story.")
+
+        content = data.get("content", "").strip()
+        title = data.get("title", "").strip()
+        if content:
+            ModerationService.check_content(content)
+            sanitized_content = ModerationService.sanitize_text(content)
+        else:
+            sanitized_content = ""
+
+        plain_text = StoryService.strip_html(sanitized_content)
+        word_cnt = StoryService.calculate_word_count(sanitized_content)
+        user_rt = data.get("estimated_reading_time")
+        read_time = int(user_rt) if user_rt and int(user_rt) > 0 else StoryService.calculate_reading_time(sanitized_content)
+
+        # Determine order
+        requested_order = data.get("order")
+        existing_count = story.chapters.count()
+        if requested_order and int(requested_order) > 0:
+            order = int(requested_order)
+            with transaction.atomic():  # type: ignore[attr-defined]
+                story.chapters.filter(order__gte=order).update(order=models.F("order") + 1)
+        else:
+            order = existing_count + 1
+
+        requested_status = data.get("status") or StoryStatus.DRAFT
+
+        chapter = StoryChapter.objects.create(
+            story=story,
+            order=order,
+            title=title,
+            content=sanitized_content,
+            plain_text_content=plain_text,
+            estimated_reading_time=read_time,
+            word_count=word_cnt,
+            status=requested_status,
+        )
+
+        cls.recalculate_story_metrics(story)
+
+        if requested_status == StoryStatus.PENDING_REVIEW:
+            cls.submit_chapter(chapter, user)
+
+        return chapter
+
+    @classmethod
+    def update_chapter(cls, chapter, data: dict, user):
+        """Updates chapter title, content, reading time, or status."""
+        if chapter.story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+            raise PermissionDeniedError("You do not have permission to edit this chapter.")
+
+        if "title" in data:
+            chapter.title = data["title"].strip()
+
+        if "content" in data:
+            content = data["content"].strip()
+            if content:
+                ModerationService.check_content(content)
+                sanitized_content = ModerationService.sanitize_text(content)
+            else:
+                sanitized_content = ""
+            chapter.content = sanitized_content
+            chapter.plain_text_content = StoryService.strip_html(sanitized_content)
+            chapter.word_count = StoryService.calculate_word_count(sanitized_content)
+
+        if "estimated_reading_time" in data:
+            user_rt = data["estimated_reading_time"]
+            chapter.estimated_reading_time = int(user_rt) if user_rt is not None and int(user_rt) > 0 else StoryService.calculate_reading_time(str(chapter.content or ""))
+        elif "content" in data:
+            chapter.estimated_reading_time = StoryService.calculate_reading_time(str(chapter.content or ""))
+
+        if "status" in data:
+            new_status = data["status"]
+            if new_status == StoryStatus.PENDING_REVIEW:
+                chapter.save()
+                cls.recalculate_story_metrics(chapter.story)
+                return cls.submit_chapter(chapter, user)
+            elif new_status == StoryStatus.PUBLISHED and getattr(user, "role", "") == "ADMIN":
+                chapter.save()
+                cls.recalculate_story_metrics(chapter.story)
+                return cls.publish_chapter(chapter, user)
+            else:
+                chapter.status = new_status
+
+        if "rejection_feedback" in data:
+            chapter.rejection_feedback = data["rejection_feedback"]
+
+        chapter.save()
+        cls.recalculate_story_metrics(chapter.story)
+        return chapter
+
+    @classmethod
+    def submit_chapter(cls, chapter, user) -> StoryChapter:
+        """Submits a single chapter for editorial review."""
+        if chapter.story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+            raise PermissionDeniedError("You do not have permission to submit this chapter.")
+
+        if not chapter.content or len(chapter.content.strip()) < 20:
+            raise ServiceValidationError("Chapter content must have at least 20 characters before submitting for review.")
+
+        # Run automated moderation
+        ModerationService.check_content(f"{chapter.title} {chapter.content}")
+
+        now = timezone.now()
+        chapter.status = StoryStatus.PENDING_REVIEW
+        chapter.save(update_fields=["status", "updated_at"])
+
+        # If the parent story was DRAFT or REJECTED, elevate parent story to PENDING_REVIEW
+        if chapter.story.status in [StoryStatus.DRAFT, StoryStatus.REJECTED]:
+            chapter.story.status = StoryStatus.PENDING_REVIEW
+            chapter.story.submitted_at = now
+            chapter.story.save(update_fields=["status", "submitted_at", "updated_at"])
+
+        return chapter
+
+    @classmethod
+    def approve_chapter(cls, chapter, admin) -> StoryChapter:
+        """Approves a chapter in editorial review."""
+        now = timezone.now()
+        chapter.status = StoryStatus.APPROVED
+        chapter.save(update_fields=["status", "updated_at"])
+        return chapter
+
+    @classmethod
+    def publish_chapter(cls, chapter, admin) -> StoryChapter:
+        """Publishes an approved or pending chapter to the public."""
+        now = timezone.now()
+        chapter.status = StoryStatus.PUBLISHED
+        chapter.published_at = now
+        chapter.save(update_fields=["status", "published_at", "updated_at"])
+
+        # Ensure parent story is also published so public readers can access it
+        if chapter.story.status != StoryStatus.PUBLISHED:
+            chapter.story.status = StoryStatus.PUBLISHED
+            if not chapter.story.published_at:
+                chapter.story.published_at = now
+            chapter.story.save(update_fields=["status", "published_at", "updated_at"])
+
+        return chapter
+
+    @classmethod
+    def reject_chapter(cls, chapter, admin, feedback: str = "") -> StoryChapter:
+        """Rejects a chapter with mandatory feedback."""
+        feedback_text = (feedback or "").strip()
+        if not feedback_text:
+            raise ServiceValidationError("Rejection feedback is mandatory when rejecting a chapter.")
+
+        now = timezone.now()
+        chapter.status = StoryStatus.REJECTED
+        chapter.rejection_feedback = feedback_text
+        chapter.save(update_fields=["status", "rejection_feedback", "updated_at"])
+
+        # If parent story was PENDING_REVIEW and all chapters are now REJECTED/DRAFT with no PUBLISHED chapters
+        published_exists = chapter.story.chapters.filter(status=StoryStatus.PUBLISHED).exists()
+        pending_exists = chapter.story.chapters.filter(status=StoryStatus.PENDING_REVIEW).exists()
+        if not published_exists and not pending_exists and chapter.story.status == StoryStatus.PENDING_REVIEW:
+            chapter.story.status = StoryStatus.REJECTED
+            chapter.story.rejection_feedback = feedback_text
+            chapter.story.save(update_fields=["status", "rejection_feedback", "updated_at"])
+
+        return chapter
+
+    @classmethod
+    def delete_chapter(cls, chapter, user) -> None:
+        """Deletes a chapter and compacts the order sequence of remaining chapters."""
+        story = chapter.story
+        if story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+            raise PermissionDeniedError("You do not have permission to delete this chapter.")
+
+        deleted_order = chapter.order
+        with transaction.atomic():  # type: ignore[attr-defined]
+            chapter.delete()
+            story.chapters.filter(order__gt=deleted_order).update(order=models.F("order") - 1)
+
+        cls.recalculate_story_metrics(story)
+
+    @classmethod
+    def reorder_chapters(cls, story, ordered_ids: list, user) -> list:
+        """Bulk reorders chapters for a story."""
+        if story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+            raise PermissionDeniedError("You do not have permission to reorder chapters on this story.")
+
+        chapters = {str(c.id): c for c in story.chapters.all()}
+        with transaction.atomic():  # type: ignore[attr-defined]
+            # First set to high order to avoid unique_together constraint collision
+            for i, cid in enumerate(ordered_ids):
+                if str(cid) in chapters:
+                    chapters[str(cid)].order = 10000 + i
+                    chapters[str(cid)].save(update_fields=["order"])
+
+            for i, cid in enumerate(ordered_ids):
+                if str(cid) in chapters:
+                    chapters[str(cid)].order = i + 1
+                    chapters[str(cid)].save(update_fields=["order"])
+
+        return list(story.chapters.order_by("order"))

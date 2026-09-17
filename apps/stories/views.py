@@ -6,23 +6,25 @@ import uuid
 from django.utils import timezone
 from django.core.cache import cache
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 from django.db.models import Q
 from django.utils.text import slugify
 
 from rest_framework import status
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 
 from common.constants import StoryStatus
-from common.permissions import IsWriter, IsAdmin
+from common.permissions import IsWriter, IsAdmin, IsAdminOrWriter
 from common.responses import success_response, created_response, no_content_response
 from common.pagination import StandardResultsSetPagination
 from common.exceptions import ResourceNotFoundError, PermissionDeniedError, ServiceValidationError
 from common.utils import resolve_category, get_engagement_context
+from apps.accounts.constants import UserRole
 
 from apps.categories.models import Category
 from apps.writers.models import WriterProfile
-from apps.stories.models import Story, StoryRevision, StoryReview
+from apps.stories.models import Story, StoryRevision, StoryReview, StoryChapter
 from apps.stories.serializers import (
     StoryCreateSerializer,
     StoryUpdateSerializer,
@@ -33,8 +35,10 @@ from apps.stories.serializers import (
     StoryScheduleSerializer,
     StoryRevisionSerializer,
     StoryReviewSerializer,
+    StoryChapterSerializer,
+    StoryChapterCreateUpdateSerializer,
 )
-from apps.stories.services import StoryService
+from apps.stories.services import StoryService, ChapterService
 
 
 def _get_writer_profile(user):
@@ -125,9 +129,13 @@ class WriterStoryListCreateView(APIView):
 
         story = StoryService.create_story(writer, serializer.validated_data)
         attach_story_tags(story, request.data.get("tags") or request.data.get("tag_names"))
+
+        if request.data.get("status") in [StoryStatus.PENDING_REVIEW, "PENDING_REVIEW"]:
+            story = StoryService.submit_story(story, writer)
+
         return created_response(
             data=StoryDetailSerializer(story, context={"request": request, **get_engagement_context(request)}).data,
-            message="Story draft created successfully."
+            message="Story submitted for review successfully." if story.status == StoryStatus.PENDING_REVIEW else "Story draft created successfully."
         )
 
 
@@ -171,10 +179,15 @@ class WriterStoryDetailView(APIView):
 
         updated_story = StoryService.update_story(story, serializer.validated_data, request.user)
         attach_story_tags(updated_story, request.data.get("tags") or request.data.get("tag_names"))
+
+        if request.data.get("status") in [StoryStatus.PENDING_REVIEW, "PENDING_REVIEW"]:
+            writer = _get_writer_profile(request.user)
+            updated_story = StoryService.submit_story(updated_story, writer)
+
         context = {"request": request, **get_engagement_context(request)}
         return success_response(
             data=StoryDetailSerializer(updated_story, context=context).data,
-            message="Story updated successfully."
+            message="Story submitted for review successfully." if updated_story.status == StoryStatus.PENDING_REVIEW else "Story updated successfully."
         )
 
     def delete(self, request, pk):
@@ -382,16 +395,19 @@ class AdminReviewQueueView(APIView):
         if status_param and status_param.upper() == "ALL":
             queryset = Story.objects.all()
         elif status_param:
-            queryset = Story.objects.filter(status__iexact=status_param)
+            queryset = Story.objects.filter(
+                Q(status__iexact=status_param) | Q(chapters__status__iexact=status_param)
+            )
         else:
             queryset = Story.objects.filter(
-                Q(status__iexact="PENDING_REVIEW")
-                | Q(status__iexact="SUBMITTED")
+                Q(status__in=[StoryStatus.PENDING_REVIEW, "SUBMITTED"])
+                | Q(chapters__status__iexact="PENDING_REVIEW")
             )
 
         queryset = (
-            queryset.select_related("writer", "category", "writer__user")
-            .prefetch_related("story_tags__tag", "reviews", "reviews__reviewer")
+            queryset.distinct()
+            .select_related("writer", "category", "writer__user")
+            .prefetch_related("story_tags__tag", "reviews", "reviews__reviewer", "chapters")
             .order_by("-created_at")
         )
         paginator = self.pagination_class()
@@ -402,8 +418,9 @@ class AdminReviewQueueView(APIView):
         # Include overall queue statistics
         stats = {
             "total_in_queue": Story.objects.filter(
-                Q(status__iexact="PENDING_REVIEW") | Q(status__iexact="SUBMITTED")
-            ).count(),
+                Q(status__in=[StoryStatus.PENDING_REVIEW, "SUBMITTED"])
+                | Q(chapters__status__iexact="PENDING_REVIEW")
+            ).distinct().count(),
             "total_rejected": Story.objects.filter(status__iexact="REJECTED").count(),
             "total_published": Story.objects.filter(status__iexact="PUBLISHED").count(),
             "total_submissions": Story.objects.count(),
@@ -530,3 +547,214 @@ class AdminStoryReviewsView(APIView):
         reviews = StoryReview.objects.filter(story=story).order_by("-reviewed_at")
         serializer = StoryReviewSerializer(reviews, many=True)
         return success_response(data=serializer.data)
+
+
+def _get_story_for_writer_or_admin(pk, user):
+    """Retrieves a story for either an admin (any story) or writer (own story)."""
+    if getattr(user, "role", "") == UserRole.ADMIN or getattr(user, "is_staff", False):
+        return Story.objects.filter(slug=pk).first() or Story.objects.filter(id=pk).first() or get_object_or_404(Story, pk=pk)
+    writer = _get_writer_profile(user)
+    return Story.objects.filter(slug=pk, writer=writer).first() or Story.objects.filter(id=pk, writer=writer).first() or get_object_or_404(Story, pk=pk, writer=writer)
+
+
+class WriterChapterListCreateView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrWriter]
+
+    def get(self, request, pk):
+        story = _get_story_for_writer_or_admin(pk, request.user)
+        chapters = story.chapters.all()
+        serializer = StoryChapterSerializer(chapters, many=True)
+        return success_response(data=serializer.data)
+
+    def post(self, request, pk):
+        story = _get_story_for_writer_or_admin(pk, request.user)
+        serializer = StoryChapterCreateUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        chapter = ChapterService.create_chapter(story, serializer.validated_data, request.user)
+        return created_response(
+            data=StoryChapterSerializer(chapter).data,
+            message="Chapter created successfully."
+        )
+
+
+class WriterChapterDetailView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrWriter]
+
+    def get(self, request, pk, chapter_pk):
+        story = _get_story_for_writer_or_admin(pk, request.user)
+        chapter = get_object_or_404(StoryChapter, id=chapter_pk, story=story)
+        return success_response(data=StoryChapterSerializer(chapter).data)
+
+    def patch(self, request, pk, chapter_pk):
+        story = _get_story_for_writer_or_admin(pk, request.user)
+        chapter = get_object_or_404(StoryChapter, id=chapter_pk, story=story)
+        serializer = StoryChapterCreateUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        updated = ChapterService.update_chapter(chapter, serializer.validated_data, request.user)
+        return success_response(
+            data=StoryChapterSerializer(updated).data,
+            message="Chapter updated successfully."
+        )
+
+    def delete(self, request, pk, chapter_pk):
+        story = _get_story_for_writer_or_admin(pk, request.user)
+        chapter = get_object_or_404(StoryChapter, id=chapter_pk, story=story)
+        ChapterService.delete_chapter(chapter, request.user)
+        return no_content_response()
+
+
+class WriterChapterReorderView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrWriter]
+
+    def post(self, request, pk):
+        story = _get_story_for_writer_or_admin(pk, request.user)
+        ordered_ids = request.data.get("ordered_ids", [])
+        if not isinstance(ordered_ids, list) or not ordered_ids:
+            raise ServiceValidationError("ordered_ids must be a non-empty list of chapter IDs.")
+        chapters = ChapterService.reorder_chapters(story, ordered_ids, request.user)
+        return success_response(
+            data=StoryChapterSerializer(chapters, many=True).data,
+            message="Chapters reordered successfully."
+        )
+
+
+class WriterChapterSubmitView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrWriter]
+
+    def post(self, request, pk, chapter_pk):
+        story = _get_story_for_writer_or_admin(pk, request.user)
+        chapter = get_object_or_404(StoryChapter, id=chapter_pk, story=story)
+        submitted_chapter = ChapterService.submit_chapter(chapter, request.user)
+        return success_response(
+            data=StoryChapterSerializer(submitted_chapter).data,
+            message=f"Chapter {submitted_chapter.order} submitted for editorial review."
+        )
+
+
+class AdminApproveChapterView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk, chapter_pk):
+        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        chapter = get_object_or_404(StoryChapter, id=chapter_pk, story=story)
+        approved_chapter = ChapterService.approve_chapter(chapter, request.user)
+        published_chapter = ChapterService.publish_chapter(approved_chapter, request.user)
+        return success_response(
+            data=StoryChapterSerializer(published_chapter).data,
+            message=f"Chapter {published_chapter.order} approved and published live."
+        )
+
+
+class AdminPublishChapterView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk, chapter_pk):
+        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        chapter = get_object_or_404(StoryChapter, id=chapter_pk, story=story)
+        published_chapter = ChapterService.publish_chapter(chapter, request.user)
+        return success_response(
+            data=StoryChapterSerializer(published_chapter).data,
+            message=f"Chapter {published_chapter.order} published live."
+        )
+
+
+class AdminRejectChapterView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk, chapter_pk):
+        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        chapter = get_object_or_404(StoryChapter, id=chapter_pk, story=story)
+        feedback = (
+            request.data.get("rejection_feedback")
+            or request.data.get("feedback")
+            or request.data.get("reason")
+            or ""
+        ).strip()
+        if not feedback:
+            raise ServiceValidationError("Rejection feedback is mandatory when rejecting a chapter.")
+
+        rejected_chapter = ChapterService.reject_chapter(chapter, request.user, feedback=feedback)
+        return success_response(
+            data=StoryChapterSerializer(rejected_chapter).data,
+            message=f"Chapter {rejected_chapter.order} rejected with feedback."
+        )
+
+
+class PublicStoryChaptersView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, slug, order=None):
+        story = get_object_or_404(Story, slug=slug, status=StoryStatus.PUBLISHED)
+        # Ensure chapters have consecutive 1-indexed order
+        ChapterService.normalize_chapter_orders(story)
+
+        is_privileged = (
+            request.user.is_authenticated
+            and (
+                getattr(request.user, "role", "") == UserRole.ADMIN
+                or getattr(request.user, "is_staff", False)
+                or (getattr(story, "writer", None) and getattr(story.writer, "user", None) == request.user)
+            )
+        )
+        if is_privileged:
+            qs = story.chapters.all().order_by("order", "created_at")
+        else:
+            published_qs = story.chapters.filter(status=StoryStatus.PUBLISHED).order_by("order", "created_at")
+            if published_qs.exists():
+                qs = published_qs
+            else:
+                qs = story.chapters.exclude(status=StoryStatus.REJECTED).order_by("order", "created_at")
+
+        if order is not None:
+            chapter = qs.filter(order=order).first()
+            if not chapter:
+                chapters_list = list(qs)
+                if 1 <= order <= len(chapters_list):
+                    chapter = chapters_list[order - 1]
+            if not chapter:
+                raise Http404("Chapter not found.")
+            return success_response(data=StoryChapterSerializer(chapter).data)
+        return success_response(data=StoryChapterSerializer(qs, many=True).data)
+
+
+class WriterActiveSeriesView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrWriter]
+
+    def get(self, request):
+        """Returns the writer's currently active ongoing multi-chapter series with its chapters."""
+        writer = _get_writer_profile(request.user)
+        story = StoryService.get_active_series_for_writer(writer)
+        if not story:
+            return success_response(data=None, message="No active ongoing series found.")
+        context = {"request": request, **get_engagement_context(request)}
+        serializer = StoryDetailSerializer(story, context=context)
+        return success_response(data=serializer.data)
+
+
+class WriterSeriesListView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrWriter]
+
+    def get(self, request):
+        """Returns all multi-chapter series authored by this writer."""
+        writer = _get_writer_profile(request.user)
+        series_qs = StoryService.get_all_series_for_writer(writer)
+        context = {"request": request, **get_engagement_context(request)}
+        serializer = StoryListSerializer(series_qs, many=True, context=context)
+        return success_response(data=serializer.data)
+
+
+class WriterSeriesStatusToggleView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrWriter]
+
+    def post(self, request, pk):
+        """Toggles or sets the ongoing/completed status of a multi-chapter series."""
+        story = _get_story_for_writer_or_admin(pk, request.user)
+        new_status = request.data.get("status") or request.data.get("series_status")
+        updated = StoryService.toggle_series_status(story, request.user, new_status=new_status)
+        context = {"request": request, **get_engagement_context(request)}
+        return success_response(
+            data=StoryDetailSerializer(updated, context=context).data,
+            message=f"Series marked as {updated.series_status.capitalize()}."
+        )
+
+
