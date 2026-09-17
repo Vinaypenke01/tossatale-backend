@@ -241,14 +241,16 @@ CELERY_TASK_ALWAYS_EAGER = env.bool("CELERY_TASK_ALWAYS_EAGER", default=True)
 CELERY_TASK_EAGER_PROPAGATES = env.bool("CELERY_TASK_EAGER_PROPAGATES", default=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Cache Configuration (Redis when USE_REDIS=True, LocMemCache when False)
+# Cache Configuration (Auto-enables Redis when REDIS_URL is provided)
 # ──────────────────────────────────────────────────────────────────────────────
-USE_REDIS = env.bool("USE_REDIS", default=False)
-if USE_REDIS:
+REDIS_URL = env("REDIS_URL", default="")
+USE_REDIS = env.bool("USE_REDIS", default=bool(REDIS_URL))
+
+if USE_REDIS and REDIS_URL:
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
-            "LOCATION": env("REDIS_URL", default="redis://localhost:6379/0"),
+            "LOCATION": REDIS_URL,
         }
     }
 else:
