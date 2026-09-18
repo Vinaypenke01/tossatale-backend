@@ -133,7 +133,7 @@ class AdminWriterListView(generics.ListAPIView):
     ordering = ["-created_at"]
 
     def get_queryset(self):
-        return WriterProfile.all_objects.select_related("user").all()
+        return WriterProfile.all_objects.filter(is_deleted=False).select_related("user")
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
@@ -163,24 +163,25 @@ class AdminWriterListView(generics.ListAPIView):
 
 
 def _get_writer_profile_by_lookup(lookup):
-    """Retrieve WriterProfile by UUID, slug, or user email."""
+    """Retrieve active (non-deleted) WriterProfile by UUID, slug, or user email."""
     import uuid
     import urllib.parse
     cleaned = urllib.parse.unquote(str(lookup)).strip()
+    
+    base_qs = WriterProfile.all_objects.filter(is_deleted=False).select_related("user", "verified_by")
     try:
         val = uuid.UUID(cleaned)
-        return WriterProfile.all_objects.select_related("user", "verified_by").get(pk=val)
+        return base_qs.get(pk=val)
     except Exception:
         pass
-
     try:
-        return WriterProfile.all_objects.select_related("user", "verified_by").get(slug__iexact=cleaned)
+        return base_qs.get(slug__iexact=cleaned)
     except WriterProfile.DoesNotExist:
         try:
-            return WriterProfile.all_objects.select_related("user", "verified_by").get(user__email__iexact=cleaned)
+            return base_qs.get(user__email__iexact=cleaned)
         except WriterProfile.DoesNotExist:
             try:
-                return WriterProfile.all_objects.select_related("user", "verified_by").get(id=cleaned)
+                return base_qs.get(id=cleaned)
             except Exception:
                 raise ResourceNotFoundError("Writer not found.")
 
@@ -202,7 +203,13 @@ class AdminWriterDetailView(APIView):
 
     def delete(self, request, lookup):
         profile = _get_writer_profile_by_lookup(lookup)
-        profile.soft_delete()
+        user = profile.user
+        with transaction.atomic():
+            # If the user is only a writer (not staff/admin), delete user which cascades cleanly
+            if user and user.role == UserRole.WRITER and not user.is_staff and not user.is_superuser:
+                user.delete()
+            else:
+                profile.delete()
         return success_response(message="Writer deleted successfully.")
 
 
