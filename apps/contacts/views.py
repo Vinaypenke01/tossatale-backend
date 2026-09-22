@@ -45,17 +45,45 @@ class PublicContactFormView(APIView):
         # Update rate count in Redis with 1-hour expiration (3600 seconds)
         cache.set(cache_key, submissions + 1, 3600)
 
-        # Dispatch confirmation email via Resend
+        # Dispatch emails via Resend
         try:
+            from django.conf import settings
             from common.services.email_service import EmailService
+
+            # 1. Send confirmation email to visitor
             EmailService.send_contact_confirmation_email(
                 to_email=email,
                 sender_name=name,
                 inquiry_type=subject or "General Inquiry",
             )
+
+            # 2. Query registered admin emails from database and settings
+            from apps.accounts.models import User
+
+            admin_qs = User.objects.filter(is_active=True).exclude(email="")
+            admin_emails = list(
+                admin_qs.filter(role="ADMIN").values_list("email", flat=True)
+            ) + list(
+                admin_qs.filter(is_superuser=True).values_list("email", flat=True)
+            ) + list(
+                admin_qs.filter(is_staff=True).values_list("email", flat=True)
+            )
+
+            default_admin = getattr(settings, "CONTACT_ADMIN_EMAIL", getattr(settings, "DEFAULT_FROM_EMAIL", "hello@tossatale.com"))
+            if default_admin and default_admin not in admin_emails:
+                admin_emails.append(default_admin)
+
+            for target_admin_email in set(admin_emails):
+                EmailService.send_contact_admin_notification_email(
+                    to_email=target_admin_email,
+                    sender_name=name,
+                    sender_email=email,
+                    subject_line=subject or "General Inquiry",
+                    message_body=message,
+                )
         except Exception as exc:
             import logging
-            logging.getLogger("apps.contacts").warning("Failed to send contact confirmation: %s", exc)
+            logging.getLogger("apps.contacts").warning("Failed to send contact emails: %s", exc)
 
         return created_response(
             data={"id": str(msg.id)},
@@ -75,6 +103,21 @@ class AdminContactMessageListView(APIView):
 
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request)
+        if page is not None:
+            data = [
+                {
+                    "id": str(m.id),
+                    "name": m.name,
+                    "email": m.email,
+                    "subject": m.subject,
+                    "message": m.message,
+                    "status": m.status,
+                    "created_at": m.created_at,
+                }
+                for m in page
+            ]
+            return paginator.get_paginated_response(data)
+
         data = [
             {
                 "id": str(m.id),
@@ -85,9 +128,9 @@ class AdminContactMessageListView(APIView):
                 "status": m.status,
                 "created_at": m.created_at,
             }
-            for m in page
+            for m in queryset
         ]
-        return paginator.get_paginated_response(data)
+        return success_response(data=data)
 
 
 class AdminContactMessageResolveView(APIView):

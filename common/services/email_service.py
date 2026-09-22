@@ -334,6 +334,60 @@ https://tossatale.com
         )
 
     @staticmethod
+    def send_contact_admin_notification_email(
+        to_email: str,
+        sender_name: str,
+        sender_email: str,
+        subject_line: str,
+        message_body: str,
+    ) -> dict:
+        """
+        Notify site administrators of a new contact inquiry with user-filled subject.
+        """
+        subject = subject_line.strip() if subject_line and subject_line.strip() else f"New Contact Inquiry from {sender_name}"
+        html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>New Contact Message</title></head>
+<body style="margin: 0; padding: 0; background-color: #0c0d0e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #f4f4f5;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="padding: 40px 15px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" max-width="560px" cellspacing="0" cellpadding="0" border="0" style="max-width: 560px; background-color: #18181b; border: 1px solid #27272a; border-radius: 20px; padding: 36px 40px;">
+          <tr>
+            <td style="border-bottom: 1px solid #27272a; padding-bottom: 20px;">
+              <h1 style="margin: 0; font-size: 22px; color: #ffffff;">New Contact Inquiry</h1>
+              <p style="margin: 4px 0 0 0; font-size: 13px; color: #a1a1aa;">Submitted via tossatale.com/contact</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding-top: 24px;">
+              <p style="margin: 0 0 8px 0; font-size: 14px; color: #a1a1aa;"><strong>From:</strong> <span style="color: #f4f4f5;">{sender_name}</span> &lt;<a href="mailto:{sender_email}" style="color: #f97316;">{sender_email}</a>&gt;</p>
+              <p style="margin: 0 0 16px 0; font-size: 14px; color: #a1a1aa;"><strong>Subject:</strong> <span style="color: #f4f4f5;">{subject_line}</span></p>
+              
+              <div style="background-color: #09090b; border: 1px solid #27272a; border-radius: 12px; padding: 20px; margin: 16px 0;">
+                <p style="margin: 0; font-size: 15px; color: #e4e4e7; line-height: 1.6; white-space: pre-wrap;">{message_body}</p>
+              </div>
+
+              <p style="margin: 20px 0 0 0; font-size: 13px; color: #71717a;">
+                You can directly reply to this email to respond to <a href="mailto:{sender_email}" style="color: #f97316;">{sender_email}</a>.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+        return EmailService.send_resend_email(
+            to=to_email,
+            subject=subject,
+            html_content=html_content,
+        )
+
+    @staticmethod
     def send_editorial_status_email(
         to_email: str,
         writer_name: str,
@@ -417,7 +471,7 @@ https://tossatale.com
         """
         from django.conf import settings
         frontend_url = getattr(settings, "FRONTEND_URL", "https://tossatale.com").split(",")[0].strip()
-        verify_link = f"{frontend_url}/api/v1/public/newsletter/verify/?token={verification_token}"
+        verify_link = f"{frontend_url}/newsletter/verify?token={verification_token}"
 
         subject = "Confirm your subscription to the Tossatale Newsletter"
         html_content = f"""
@@ -462,4 +516,81 @@ https://tossatale.com
             subject=subject,
             html_content=html_content,
         )
+
+    @staticmethod
+    def broadcast_new_content_email(
+        to_email: str,
+        content_type: str,
+        title: str,
+        description: str,
+        content_url: str,
+        cover_image: str = "",
+        unsubscribe_token: str = "",
+    ) -> dict:
+        """
+        Broadcast email to a newsletter subscriber about new stories or films.
+        """
+        from django.conf import settings
+        frontend_url = getattr(settings, "FRONTEND_URL", "https://tossatale.com").split(",")[0].strip()
+        unsub_link = f"{frontend_url}/api/v1/public/newsletter/unsubscribe/?token={unsubscribe_token}" if unsubscribe_token else f"{frontend_url}"
+
+        badge_name = "New Short Film" if "film" in content_type.lower() or "video" in content_type.lower() else "New Story Release"
+        subject = f"[{badge_name}] {title} — tossatale"
+
+        image_block = ""
+        if cover_image:
+            image_block = f"""
+            <div style="margin: 20px 0; border-radius: 12px; overflow: hidden; max-height: 260px;">
+              <img src="{cover_image}" alt="{title}" style="width: 100%; height: auto; display: block; object-fit: cover;" />
+            </div>
+            """
+
+        html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>{title}</title></head>
+<body style="margin: 0; padding: 0; background-color: #0c0d0e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #f4f4f5;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="padding: 40px 15px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" max-width="560px" cellspacing="0" cellpadding="0" border="0" style="max-width: 560px; background-color: #18181b; border: 1px solid #27272a; border-radius: 20px; padding: 36px 40px;">
+          <tr>
+            <td align="center" style="border-bottom: 1px solid #27272a; padding-bottom: 20px;">
+              <h1 style="margin: 0; font-size: 26px; color: #ffffff;">tossatale</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding-top: 28px;">
+              <div style="display: inline-block; padding: 4px 12px; border-radius: 9999px; background-color: #f9731620; border: 1px solid #f9731650; color: #f97316; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px;">
+                {badge_name}
+              </div>
+              <h2 style="margin: 0 0 12px 0; font-size: 22px; color: #ffffff; line-height: 1.3;">{title}</h2>
+              {image_block}
+              <p style="margin: 0 0 24px 0; font-size: 15px; color: #a1a1aa; line-height: 1.6;">
+                {description}
+              </p>
+              <div style="text-align: center; margin: 28px 0;">
+                <a href="{content_url}" style="background-color: #f97316; color: #ffffff; padding: 12px 28px; text-decoration: none; font-weight: 700; border-radius: 9999px; display: inline-block;">
+                  Read / Watch Now &rarr;
+                </a>
+              </div>
+              <p style="margin: 30px 0 0 0; font-size: 12px; color: #71717a; text-align: center; border-top: 1px solid #27272a; padding-top: 20px;">
+                You received this email because you subscribed to Tossatale releases.<br>
+                <a href="{unsub_link}" style="color: #71717a; text-decoration: underline;">Unsubscribe</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+        return EmailService.send_resend_email(
+            to=to_email,
+            subject=subject,
+            html_content=html_content,
+        )
+
 

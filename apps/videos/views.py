@@ -28,7 +28,7 @@ class PublicVideoListView(APIView):
 
         if upcoming_param is not None and upcoming_param.lower() in ["true", "1"]:
             queryset = queryset.filter(is_upcoming=True)
-        elif upcoming_param is not None and upcoming_param.lower() in ["false", "0"]:
+        else:
             queryset = queryset.filter(is_upcoming=False)
 
         if category_param:

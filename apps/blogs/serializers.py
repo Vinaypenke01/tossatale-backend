@@ -8,15 +8,20 @@ from apps.categories.serializers import CategorySerializer, TagSerializer
 
 class BlogSerializer(serializers.ModelSerializer):
     category = CategorySerializer(read_only=True)
+    tags = serializers.SerializerMethodField()
 
     class Meta:
         model = Blog
         fields = [
             "id", "author", "title", "slug", "subtitle", "content", "plain_text_content",
-            "cover_image", "featured_image", "category", "seo_title", "seo_description",
+            "cover_image", "featured_image", "category", "tags", "seo_title", "seo_description",
             "status", "is_featured", "reading_time", "word_count", "views_count",
             "likes_count", "published_at", "created_at", "updated_at"
         ]
+
+    def get_tags(self, obj):
+        tags = [bt.tag for bt in obj.blog_tags.select_related("tag").all()]
+        return TagSerializer(tags, many=True).data
 
 
 class BlogCreateUpdateSerializer(serializers.Serializer):

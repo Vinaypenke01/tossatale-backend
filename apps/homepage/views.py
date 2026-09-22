@@ -134,11 +134,11 @@ class PublicHomepageView(APIView):
                 )
                 payload["trending_stories"] = HomepageStorySerializer(trending, many=True).data
 
-            # Featured/Latest blogs (4 blogs) - lightweight serializer with deferred content
+            # Featured blogs explicitly marked as featured (up to 4 blogs)
             blogs = (
-                Blog.objects.filter(status="PUBLISHED")
+                Blog.objects.filter(status="PUBLISHED", is_featured=True)
                 .defer("content", "plain_text_content", "featured_image")
-                .select_related("category")
+                .select_related("category", "author")
                 .order_by("-published_at")[:4]
             )
             payload["featured_blogs"] = HomepageBlogSerializer(blogs, many=True).data
@@ -147,8 +147,8 @@ class PublicHomepageView(APIView):
             writers = WriterProfile.objects.filter(is_verified=True).order_by("-total_published_stories")[:6]
             payload["featured_writers"] = WriterProfileSerializer(writers, many=True).data
 
-            # Latest videos (4 short films)
-            videos = Video.objects.filter(is_active=True).select_related("category").order_by("-created_at")[:4]
+            # Latest videos (4 short films, excluding upcoming productions)
+            videos = Video.objects.filter(is_active=True, is_upcoming=False).select_related("category").order_by("-created_at")[:4]
             payload["latest_videos"] = VideoSerializer(videos, many=True).data
 
             # Categories

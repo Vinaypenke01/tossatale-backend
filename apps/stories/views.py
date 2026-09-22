@@ -688,22 +688,8 @@ class PublicStoryChaptersView(APIView):
         # Ensure chapters have consecutive 1-indexed order
         ChapterService.normalize_chapter_orders(story)
 
-        is_privileged = (
-            request.user.is_authenticated
-            and (
-                getattr(request.user, "role", "") == UserRole.ADMIN
-                or getattr(request.user, "is_staff", False)
-                or (getattr(story, "writer", None) and getattr(story.writer, "user", None) == request.user)
-            )
-        )
-        if is_privileged:
-            qs = story.chapters.all().order_by("order", "created_at")
-        else:
-            published_qs = story.chapters.filter(status=StoryStatus.PUBLISHED).order_by("order", "created_at")
-            if published_qs.exists():
-                qs = published_qs
-            else:
-                qs = story.chapters.exclude(status=StoryStatus.REJECTED).order_by("order", "created_at")
+        # For a published story, retrieve all active non-rejected chapters ordered sequentially
+        qs = story.chapters.exclude(status=StoryStatus.REJECTED).order_by("order", "created_at")
 
         if order is not None:
             chapter = qs.filter(order=order).first()
