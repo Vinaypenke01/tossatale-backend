@@ -659,7 +659,6 @@ class ChapterService:
         Story.objects.filter(id=story.id).update(
             word_count=total_words,
             estimated_reading_time=total_reading_time,
-            chapter_count=chapter_count,
             is_multi_chapter=True,
             updated_at=timezone.now(),
         )
