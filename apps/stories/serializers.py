@@ -229,11 +229,7 @@ class StoryDetailSerializer(serializers.ModelSerializer):
         if is_privileged:
             qs = obj.chapters.all().order_by("order", "created_at")
         else:
-            published_qs = obj.chapters.filter(status=StoryStatus.PUBLISHED).order_by("order", "created_at")
-            if published_qs.exists():
-                qs = published_qs
-            else:
-                qs = obj.chapters.exclude(status=StoryStatus.REJECTED).order_by("order", "created_at")
+            qs = obj.chapters.exclude(status=StoryStatus.REJECTED).order_by("order", "created_at")
         return StoryChapterSerializer(qs, many=True).data
 
     def get_chapter_count(self, obj):

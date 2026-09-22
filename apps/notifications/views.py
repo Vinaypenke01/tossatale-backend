@@ -80,3 +80,37 @@ class NotificationMarkAllReadView(APIView):
             message=f"{count} notifications marked as read."
         )
 
+
+class NotificationClearAllView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            count, _ = Notification.objects.filter(recipient=request.user).delete()
+        except (ProgrammingError, OperationalError):
+            count = 0
+
+        return success_response(
+            data={"cleared_count": count},
+            message=f"{count} notifications cleared."
+        )
+
+    def delete(self, request):
+        return self.post(request)
+
+
+class NotificationDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        try:
+            notif = Notification.objects.filter(id=pk, recipient=request.user).first()
+        except (ProgrammingError, OperationalError):
+            notif = None
+
+        if not notif:
+            raise ResourceNotFoundError("Notification not found.")
+
+        notif.delete()
+        return success_response(message="Notification dismissed.")
+

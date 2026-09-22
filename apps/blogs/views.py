@@ -13,9 +13,36 @@ from django.utils.text import slugify
 from common.permissions import IsAdmin
 from common.responses import success_response, created_response, no_content_response
 from common.pagination import StandardResultsSetPagination
-from apps.blogs.models import Blog
-from apps.categories.models import Category
+from apps.blogs.models import Blog, BlogTag
+from apps.categories.models import Category, Tag
 from apps.blogs.serializers import BlogSerializer, BlogCreateUpdateSerializer
+from django.core.cache import cache
+
+
+def _sync_blog_tags(blog, tags_input):
+    if tags_input is None:
+        return
+    BlogTag.objects.filter(blog=blog).delete()
+    if isinstance(tags_input, str):
+        tag_names = [t.strip().lstrip("#") for t in tags_input.split(",") if t.strip()]
+    elif isinstance(tags_input, list):
+        tag_names = [str(t).strip().lstrip("#") for t in tags_input if str(t).strip()]
+    else:
+        tag_names = []
+
+    for name in tag_names:
+        if not name:
+            continue
+        slug_candidate = slugify(name) or "tag"
+        tag = Tag.all_objects.filter(name__iexact=name).first() or Tag.all_objects.filter(slug=slug_candidate).first()
+        if not tag:
+            base_slug = slug_candidate
+            counter = 1
+            while Tag.all_objects.filter(slug=slug_candidate).exists():
+                slug_candidate = f"{base_slug}-{counter}"
+                counter += 1
+            tag = Tag.objects.create(name=name, slug=slug_candidate, is_active=True)
+        BlogTag.objects.get_or_create(blog=blog, tag=tag)
 
 
 class PublicBlogListView(APIView):
@@ -23,7 +50,7 @@ class PublicBlogListView(APIView):
     pagination_class = StandardResultsSetPagination
 
     def get(self, request):
-        queryset = Blog.objects.filter(status="PUBLISHED").select_related("category")
+        queryset = Blog.objects.filter(status="PUBLISHED").select_related("category").prefetch_related("blog_tags__tag")
         category_param = request.query_params.get("category")
         search_param = request.query_params.get("search")
 
@@ -42,7 +69,11 @@ class PublicBlogDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
-        blog = get_object_or_404(Blog.objects.select_related("category"), slug=slug, status="PUBLISHED")
+        blog = get_object_or_404(
+            Blog.objects.select_related("category").prefetch_related("blog_tags__tag"),
+            slug=slug,
+            status="PUBLISHED"
+        )
         return success_response(data=BlogSerializer(blog).data)
 
 
@@ -125,7 +156,7 @@ class AdminBlogListCreateView(APIView):
     pagination_class = StandardResultsSetPagination
 
     def get(self, request):
-        queryset = Blog.objects.all().select_related("category")
+        queryset = Blog.objects.all().select_related("category").prefetch_related("blog_tags__tag")
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request)
         serializer = BlogSerializer(page, many=True)
@@ -185,6 +216,11 @@ class AdminBlogListCreateView(APIView):
             word_count=words,
             reading_time=final_rt,
         )
+
+        tags_val = data.get("tags") if data.get("tags") is not None else data.get("tag")
+        _sync_blog_tags(blog, tags_val)
+        cache.delete("homepage")
+
         return created_response(data=BlogSerializer(blog).data, message="Blog post created successfully.")
 
 
@@ -244,10 +280,17 @@ class AdminBlogDetailView(APIView):
             blog.cover_image = data["cover_image"]
 
         blog.save()
+
+        if "tags" in data or "tag" in data:
+            tags_val = data.get("tags") if data.get("tags") is not None else data.get("tag")
+            _sync_blog_tags(blog, tags_val)
+
+        cache.delete("homepage")
         return success_response(data=BlogSerializer(blog).data, message="Blog post updated successfully.")
 
     def delete(self, request, slug):
         blog = self._get_blog(slug)
         if blog:
             blog.delete()
+            cache.delete("homepage")
         return no_content_response()

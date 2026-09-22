@@ -427,21 +427,36 @@ class StoryService:
     @classmethod
     def reject_story(cls, story, admin, feedback: str, internal_notes: str = "") -> Story:
         """
-        Rejects a PENDING_REVIEW story requiring feedback per §22.4.
+        Rejects a story requiring feedback per §22.4. Supports rejecting / unpublishing
+        PENDING_REVIEW, SUBMITTED, APPROVED, DRAFT, and PUBLISHED stories.
         """
-        if story.status not in [StoryStatus.PENDING_REVIEW, "SUBMITTED", StoryStatus.APPROVED, StoryStatus.DRAFT, StoryStatus.REJECTED]:
+        if story.status not in [StoryStatus.PENDING_REVIEW, "SUBMITTED", StoryStatus.APPROVED, StoryStatus.DRAFT, StoryStatus.REJECTED, StoryStatus.PUBLISHED]:
             raise InvalidStateTransitionError(f"Cannot reject story in state '{story.status}'.")
 
         feedback_text = feedback.strip() if feedback else ""
         if not feedback_text:
             raise ServiceValidationError("Rejection feedback is mandatory when rejecting a story.")
 
+        was_published = (story.status == StoryStatus.PUBLISHED)
         now = timezone.now()
         story.status = StoryStatus.REJECTED
         story.reviewed_by = admin
         story.reviewed_at = now
         story.rejection_feedback = feedback_text
         story.save(update_fields=["status", "reviewed_by", "reviewed_at", "rejection_feedback", "updated_at"])
+
+        if was_published and story.writer:
+            story.writer.total_published_stories = Story.objects.filter(
+                writer=story.writer, status=StoryStatus.PUBLISHED
+            ).count()
+            story.writer.save(update_fields=["total_published_stories"])
+
+        if story.is_multi_chapter:
+            StoryChapter.objects.filter(story=story).exclude(status=StoryStatus.DRAFT).update(
+                status=StoryStatus.REJECTED,
+                rejection_feedback=feedback_text,
+                updated_at=now
+            )
 
         # Create review log
         StoryReview.objects.create(
@@ -454,11 +469,17 @@ class StoryService:
         )
 
         # Notify writer
+        notif_title = "Story Unpublished & Rejected" if was_published else "Changes Requested / Story Feedback"
+        notif_msg = (
+            f"Your published story '{story.title}' was unpublished and rejected by the editorial team. Feedback: {feedback_text}"
+            if was_published else
+            f"Editorial feedback for '{story.title}': {feedback_text}"
+        )
         Notification.objects.create(
             recipient=story.writer.user,
             notification_type=NotificationType.STORY_REJECTED,
-            title="Changes Requested / Story Feedback",
-            message=f"Editorial feedback for '{story.title}': {feedback_text}",
+            title=notif_title,
+            message=notif_msg,
             action_url=f"/writer/stories/{story.id}",
         )
 
@@ -483,6 +504,12 @@ class StoryService:
             reviewed_by=admin,
             reviewed_at=now,
             updated_at=now
+        )
+        # Ensure all non-rejected chapters are marked as PUBLISHED
+        StoryChapter.objects.filter(story_id=story.id).exclude(status=StoryStatus.REJECTED).update(
+            status=StoryStatus.PUBLISHED,
+            published_at=now,
+            updated_at=now,
         )
         story.refresh_from_db()
 
@@ -796,10 +823,20 @@ class ChapterService:
         # If parent story was PENDING_REVIEW and all chapters are now REJECTED/DRAFT with no PUBLISHED chapters
         published_exists = chapter.story.chapters.filter(status=StoryStatus.PUBLISHED).exists()
         pending_exists = chapter.story.chapters.filter(status=StoryStatus.PENDING_REVIEW).exists()
-        if not published_exists and not pending_exists and chapter.story.status == StoryStatus.PENDING_REVIEW:
+        if not published_exists and not pending_exists and chapter.story.status in [StoryStatus.PENDING_REVIEW, StoryStatus.PUBLISHED]:
             chapter.story.status = StoryStatus.REJECTED
             chapter.story.rejection_feedback = feedback_text
             chapter.story.save(update_fields=["status", "rejection_feedback", "updated_at"])
+
+        # Notify writer
+        if chapter.story.writer and getattr(chapter.story.writer, "user", None):
+            Notification.objects.create(
+                recipient=chapter.story.writer.user,
+                notification_type=NotificationType.STORY_REJECTED,
+                title=f"Chapter {chapter.order} Rejected / Feedback",
+                message=f"Editorial feedback for '{chapter.story.title}' (Part {chapter.order} - '{chapter.title}'): {feedback_text}",
+                action_url=f"/writer/editor/{chapter.story.id}",
+            )
 
         return chapter
 
