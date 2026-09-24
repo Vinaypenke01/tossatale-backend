@@ -576,10 +576,62 @@ class UserService:
     @staticmethod
     def update_profile(user: User, data: dict) -> User:
         allowed_fields = {"first_name", "last_name", "display_name", "profile_photo"}
+        changed = []
         for field, value in data.items():
-            if field in allowed_fields:
+            if field in allowed_fields and getattr(user, field) != value:
                 setattr(user, field, value)
+                changed.append(field)
         user.save()
+
+        # Update associated WriterProfile if exists, or create for admin
+        raw_slug = data.get("writer_slug", "")
+        clean_slug = str(raw_slug).strip().lower().lstrip("@") if raw_slug else ""
+
+        if hasattr(user, "writer_profile") and user.writer_profile:
+            wp = user.writer_profile
+            wp_changed = False
+            if "bio" in data and wp.bio != data["bio"]:
+                wp.bio = data["bio"]
+                wp_changed = True
+            if "writer_bio" in data and wp.bio != data["writer_bio"]:
+                wp.bio = data["writer_bio"]
+                wp_changed = True
+            if clean_slug and wp.slug != clean_slug:
+                from common.utils import generate_unique_slug
+                from django.utils.text import slugify
+                base_slug = str(slugify(clean_slug) or "writer")
+                final_slug = generate_unique_slug(wp.__class__, base_slug, instance_id=wp.id)
+                wp.slug = final_slug
+                wp_changed = True
+                changed.append("writer_slug")
+            if wp_changed:
+                wp.save()
+                changed.append("bio")
+        elif getattr(user, "role", "") in ["ADMIN", "WRITER"] and (clean_slug or data.get("bio") or data.get("writer_bio")):
+            from apps.writers.models import WriterProfile
+            from common.utils import generate_unique_slug
+            from django.utils.text import slugify
+            base_title = clean_slug or user.get_full_name() or user.display_name or user.email.split("@")[0]
+            base_slug = str(slugify(str(base_title)) or "writer")
+            final_slug = generate_unique_slug(WriterProfile, base_slug)
+            WriterProfile.objects.create(
+                user=user,
+                slug=final_slug,
+                bio=data.get("bio", "") or data.get("writer_bio", ""),
+                is_active=True,
+            )
+            changed.append("writer_profile_created")
+
+        if getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False):
+            from apps.audit_logs.services import AuditLogService
+            from common.constants import AuditAction
+            AuditLogService.log(
+                actor=user,
+                action=AuditAction.UPDATE,
+                obj=user,
+                changes={"updated_fields": changed or list(data.keys())},
+            )
+
         return user
 
     @staticmethod

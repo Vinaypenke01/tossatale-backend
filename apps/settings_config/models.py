@@ -31,7 +31,7 @@ class SiteSettings(models.Model):
 
     # System state
     maintenance_mode = models.BooleanField(default=False)
-    maintenance_message = models.TextField(default="Tossatale is currently undergo scheduled maintenance. We'll be back shortly.")
+    maintenance_message = models.TextField(default="We are currently making a few improvements behind the scenes to make your experience better. Please check back soon.")
 
     # Analytics IDs
     analytics_google_id = models.CharField(max_length=50, blank=True)
@@ -77,4 +77,4 @@ class FAQItem(BaseModel):
         ordering = ["order", "created_at"]
 
     def __str__(self):
-        return f"[{self.category}] {self.question[:50]}"
+        return f"[{self.category}] {str(self.question)[:50]}"

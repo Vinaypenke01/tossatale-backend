@@ -165,7 +165,7 @@ class WriterStoryDetailView(APIView):
     def patch(self, request, pk):
         story = self._get_story(request, pk)
         data = request.data.copy()
-        category_input = data.get("category")
+        category_input = data.get("category") or data.get("category_slug") or data.get("category_id")
         if category_input:
             cat_obj = resolve_category(category_input)
             if not cat_obj:
@@ -337,7 +337,7 @@ class AdminStoryDetailView(APIView):
     def patch(self, request, pk):
         story = self._get_story(pk)
         data = request.data.copy()
-        category_input = data.get("category")
+        category_input = data.get("category") or data.get("category_slug") or data.get("category_id")
         if category_input:
             cat_obj = resolve_category(category_input)
             if not cat_obj:

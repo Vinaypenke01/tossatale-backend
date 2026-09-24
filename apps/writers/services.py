@@ -32,9 +32,9 @@ class WriterService:
         if user.role != UserRole.WRITER:
             raise ServiceValidationError("User must have WRITER role to create a writer profile.")
 
-        slug = generate_unique_slug(WriterProfile, user.get_full_name())
+        slug = generate_unique_slug(WriterProfile, str(user.get_full_name() or user.display_name or user.email))
 
-        with transaction.atomic():
+        with transaction.atomic():  # type: ignore[attr-defined]
             profile = WriterProfile.objects.create(
                 user=user,
                 slug=slug,
@@ -82,6 +82,15 @@ class WriterService:
         profile.is_active = True
         profile.save(update_fields=["is_active", "updated_at"])
         logger.info("Writer activated: %s by %s", profile.slug, admin_user.email)
+
+        from apps.audit_logs.services import AuditLogService
+        from common.constants import AuditAction
+        AuditLogService.log(
+            actor=admin_user,
+            action=AuditAction.ACTIVATE,
+            obj=profile,
+            changes={"is_active": {"before": False, "after": True}},
+        )
         return profile
 
     @staticmethod
@@ -92,6 +101,15 @@ class WriterService:
         profile.is_active = False
         profile.save(update_fields=["is_active", "updated_at"])
         logger.info("Writer deactivated: %s by %s", profile.slug, admin_user.email)
+
+        from apps.audit_logs.services import AuditLogService
+        from common.constants import AuditAction
+        AuditLogService.log(
+            actor=admin_user,
+            action=AuditAction.DEACTIVATE,
+            obj=profile,
+            changes={"is_active": {"before": True, "after": False}},
+        )
         return profile
 
     @staticmethod
@@ -105,7 +123,7 @@ class WriterService:
         if not profile.is_active:
             raise ServiceValidationError("Cannot verify an inactive writer.")
 
-        with transaction.atomic():
+        with transaction.atomic():  # type: ignore[attr-defined]
             profile.is_verified = True
             profile.verified_at = timezone.now()
             profile.verified_by = admin_user
@@ -128,6 +146,15 @@ class WriterService:
             except Exception:
                 pass
 
+        from apps.audit_logs.services import AuditLogService
+        from common.constants import AuditAction
+        AuditLogService.log(
+            actor=admin_user,
+            action=AuditAction.VERIFY,
+            obj=profile,
+            changes={"is_verified": {"before": False, "after": True}},
+        )
+
         logger.info("Writer verified: %s by Admin %s", profile.slug, admin_user.email)
         return profile
 
@@ -139,6 +166,15 @@ class WriterService:
 
         profile.is_verified = False
         profile.save(update_fields=["is_verified", "updated_at"])
+
+        from apps.audit_logs.services import AuditLogService
+        from common.constants import AuditAction
+        AuditLogService.log(
+            actor=admin_user,
+            action=AuditAction.UNVERIFY,
+            obj=profile,
+            changes={"is_verified": {"before": True, "after": False}},
+        )
 
         logger.info("Writer unverified: %s by Admin %s", profile.slug, admin_user.email)
         return profile

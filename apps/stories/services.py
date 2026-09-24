@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.utils.text import slugify
 from django.db import models, transaction
 
-from common.constants import StoryStatus, ModerationStatus, ReviewDecision, NotificationType, SeriesStatusType
+from common.constants import StoryStatus, ModerationStatus, ReviewDecision, NotificationType, SeriesStatusType, AuditAction
 from common.exceptions import (
     ServiceValidationError,
     PermissionDeniedError,
@@ -19,6 +19,7 @@ from apps.stories.models import Story, StoryTag, StoryRevision, StoryReview, Sto
 from apps.categories.models import Category, Tag
 from apps.moderation.services import ModerationService
 from apps.notifications.models import Notification
+from apps.audit_logs.services import AuditLogService
 
 
 class StoryService:
@@ -167,6 +168,14 @@ class StoryService:
             change_summary="Initial draft created",
         )
 
+        if getattr(writer.user, "role", "") == "ADMIN" or getattr(writer.user, "is_staff", False):
+            AuditLogService.log(
+                actor=writer.user,
+                action=AuditAction.CREATE,
+                obj=story,
+                changes={"title": story.title, "status": story.status, "is_multi_chapter": story.is_multi_chapter},
+            )
+
         return story
 
     @staticmethod
@@ -181,10 +190,20 @@ class StoryService:
     @classmethod
     def update_story(cls, story, data: dict, user) -> Story:
         """
-        Updates an existing story draft and logs a new revision version.
+        Updates an existing story or series details and logs a new revision version.
         """
-        if story.status not in [StoryStatus.DRAFT, StoryStatus.REJECTED]:
-            raise InvalidStateTransitionError("Only DRAFT or REJECTED stories can be edited.")
+        is_admin = getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+
+        if story.writer and story.writer.user != user and not is_admin:
+            raise PermissionDeniedError("You do not have permission to edit this story.")
+
+        # Status transition check:
+        # 1. ADMIN users can edit stories and series in any status.
+        # 2. Multi-chapter series can have their metadata (title, subtitle, category, tags, series_status) updated at any stage.
+        # 3. Standalone stories can only be edited by author when in DRAFT or REJECTED status.
+        if not is_admin and not story.is_multi_chapter:
+            if story.status not in [StoryStatus.DRAFT, StoryStatus.REJECTED]:
+                raise InvalidStateTransitionError("Only DRAFT or REJECTED stories can be edited.")
 
         if "title" in data:
             title = data["title"].strip()
@@ -242,9 +261,10 @@ class StoryService:
         if "seo_description" in data:
             story.seo_description = data["seo_description"][:160]
 
+        story.updated_at = timezone.now()
         story.save(update_fields=[
             "title", "slug", "subtitle", "content", "plain_text_content",
-            "word_count", "estimated_reading_time", "is_multi_chapter", "category", "seo_title",
+            "word_count", "estimated_reading_time", "is_multi_chapter", "series_status", "category", "seo_title",
             "seo_description", "allow_comments", "updated_at"
         ])
 
@@ -273,6 +293,14 @@ class StoryService:
             edited_by=user,
             change_summary=data.get("change_summary", f"Updated version {next_ver}"),
         )
+
+        if is_admin:
+            AuditLogService.log(
+                actor=user,
+                action=AuditAction.UPDATE,
+                obj=story,
+                changes={"title": story.title, "status": story.status, "updated_fields": list(data.keys())},
+            )
 
         return story
 
@@ -406,6 +434,13 @@ class StoryService:
             reviewed_at=now,
         )
 
+        AuditLogService.log(
+            actor=admin,
+            action=AuditAction.APPROVE,
+            obj=story,
+            changes={"status": {"before": StoryStatus.PENDING_REVIEW, "after": StoryStatus.APPROVED}},
+        )
+
         # Notify writer
         Notification.objects.create(
             recipient=story.writer.user,
@@ -468,6 +503,13 @@ class StoryService:
             reviewed_at=now,
         )
 
+        AuditLogService.log(
+            actor=admin,
+            action=AuditAction.REJECT,
+            obj=story,
+            changes={"status": {"before": story.status, "after": StoryStatus.REJECTED}, "feedback": feedback_text},
+        )
+
         # Notify writer
         notif_title = "Story Unpublished & Rejected" if was_published else "Changes Requested / Story Feedback"
         notif_msg = (
@@ -498,6 +540,7 @@ class StoryService:
         Publishes a story per §22.5.
         """
         now = timezone.now()
+        old_status = story.status
         Story.objects.filter(id=story.id).update(
             status=StoryStatus.PUBLISHED,
             published_at=now,
@@ -520,6 +563,13 @@ class StoryService:
                 writer=writer, status=StoryStatus.PUBLISHED
             ).count()
             writer.save(update_fields=["total_published_stories"])
+
+        AuditLogService.log(
+            actor=admin,
+            action=AuditAction.PUBLISH,
+            obj=story,
+            changes={"status": {"before": old_status, "after": StoryStatus.PUBLISHED}},
+        )
 
         # Notify writer
         if writer and getattr(writer, "user", None):
@@ -786,14 +836,23 @@ class ChapterService:
     def approve_chapter(cls, chapter, admin) -> StoryChapter:
         """Approves a chapter in editorial review."""
         now = timezone.now()
+        old_status = chapter.status
         chapter.status = StoryStatus.APPROVED
         chapter.save(update_fields=["status", "updated_at"])
+
+        AuditLogService.log(
+            actor=admin,
+            action=AuditAction.APPROVE,
+            obj=chapter,
+            changes={"status": {"before": old_status, "after": StoryStatus.APPROVED}},
+        )
         return chapter
 
     @classmethod
     def publish_chapter(cls, chapter, admin) -> StoryChapter:
         """Publishes an approved or pending chapter to the public."""
         now = timezone.now()
+        old_status = chapter.status
         chapter.status = StoryStatus.PUBLISHED
         chapter.published_at = now
         chapter.save(update_fields=["status", "published_at", "updated_at"])
@@ -805,6 +864,12 @@ class ChapterService:
                 chapter.story.published_at = now
             chapter.story.save(update_fields=["status", "published_at", "updated_at"])
 
+        AuditLogService.log(
+            actor=admin,
+            action=AuditAction.PUBLISH,
+            obj=chapter,
+            changes={"status": {"before": old_status, "after": StoryStatus.PUBLISHED}},
+        )
         return chapter
 
     @classmethod
@@ -815,9 +880,17 @@ class ChapterService:
             raise ServiceValidationError("Rejection feedback is mandatory when rejecting a chapter.")
 
         now = timezone.now()
+        old_status = chapter.status
         chapter.status = StoryStatus.REJECTED
         chapter.rejection_feedback = feedback_text
         chapter.save(update_fields=["status", "rejection_feedback", "updated_at"])
+
+        AuditLogService.log(
+            actor=admin,
+            action=AuditAction.REJECT,
+            obj=chapter,
+            changes={"status": {"before": old_status, "after": StoryStatus.REJECTED}, "feedback": feedback_text},
+        )
 
         # If parent story was PENDING_REVIEW and all chapters are now REJECTED/DRAFT with no PUBLISHED chapters
         published_exists = chapter.story.chapters.filter(status=StoryStatus.PUBLISHED).exists()

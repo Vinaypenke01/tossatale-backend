@@ -100,14 +100,17 @@ class TokenPairSerializer(serializers.Serializer):
 # ──────────────────────────────────────────────────────────────────────────────
 
 class UserMeSerializer(serializers.ModelSerializer):
-    """Minimal user info returned from GET /auth/me/"""
+    """Minimal user info returned from GET /auth/me/ and GET /user/profile/"""
     full_name = serializers.SerializerMethodField()
+    writer_slug = serializers.SerializerMethodField()
+    writer_id = serializers.SerializerMethodField()
+    writer_bio = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             "id", "email", "first_name", "last_name", "full_name",
-            "display_name", "role", "profile_photo",
+            "display_name", "role", "profile_photo", "writer_slug", "writer_id", "writer_bio",
             "auth_provider", "is_email_verified", "is_active",
             "last_login", "created_at",
         ]
@@ -116,12 +119,31 @@ class UserMeSerializer(serializers.ModelSerializer):
     def get_full_name(self, obj):
         return obj.get_full_name()
 
+    def get_writer_slug(self, obj):
+        if hasattr(obj, "writer_profile") and obj.writer_profile:
+            return obj.writer_profile.slug
+        return None
+
+    def get_writer_id(self, obj):
+        if hasattr(obj, "writer_profile") and obj.writer_profile:
+            return str(obj.writer_profile.id)
+        return None
+
+    def get_writer_bio(self, obj):
+        if hasattr(obj, "writer_profile") and obj.writer_profile:
+            return obj.writer_profile.bio
+        return ""
+
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
     """Used for PATCH /user/profile/ — only writable user fields."""
+    bio = serializers.CharField(required=False, allow_blank=True)
+    writer_bio = serializers.CharField(required=False, allow_blank=True)
+    writer_slug = serializers.CharField(required=False, allow_blank=True)
+
     class Meta:
         model = User
-        fields = ["first_name", "last_name", "display_name", "profile_photo"]
+        fields = ["first_name", "last_name", "display_name", "profile_photo", "bio", "writer_bio", "writer_slug"]
 
 
 class NotificationPreferenceSerializer(serializers.ModelSerializer):

@@ -26,6 +26,11 @@ class PublicSettingsView(APIView):
 
     def get(self, request):
         s = SiteSettings.get_solo()
+        default_msg = "We are currently making a few improvements behind the scenes to make your experience better. Please check back soon."
+        if not s.maintenance_message or "undergo scheduled maintenance" in s.maintenance_message:
+            s.maintenance_message = default_msg
+            s.save(update_fields=["maintenance_message"])
+
         return success_response(data={
             "site_name": s.site_name,
             "tagline": s.tagline,
