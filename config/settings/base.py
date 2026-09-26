@@ -192,6 +192,19 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 20,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "common.exceptions.custom_exception_handler",
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "120/minute",
+        "user": "600/minute",
+        "auth_login": "15/minute",
+        "auth_register": "10/minute",
+        "auth_otp": "5/minute",
+        "auth_password_reset": "5/minute",
+        "contact_submit": "10/hour",
+    },
 }
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.accounts.serializers import (
@@ -40,6 +41,8 @@ User = get_user_model()
 class RegisterView(APIView):
     """POST /api/v1/auth/register/ — Register Reader or Writer"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_register"
     serializer_class = RegisterSerializer
 
     def post(self, request):
@@ -55,6 +58,8 @@ class RegisterView(APIView):
 class RegisterVerifyOTPView(APIView):
     """POST /api/v1/auth/register/verify-otp/ — Verify writer registration OTP"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_otp"
 
     def post(self, request):
         email = request.data.get("email", "").strip()
@@ -69,6 +74,8 @@ class RegisterVerifyOTPView(APIView):
 class RegisterResendOTPView(APIView):
     """POST /api/v1/auth/register/resend-otp/ — Resend writer registration OTP"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_otp"
 
     def post(self, request):
         email = request.data.get("email", "").strip()
@@ -108,6 +115,8 @@ class ReaderMigrateUnauthenticatedView(APIView):
     Allows a logged-out Reader to authenticate and migrate directly to Writer.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_register"
     serializer_class = ReaderMigrateUnauthenticatedSerializer
 
     def post(self, request):
@@ -126,6 +135,8 @@ class ReaderMigrateUnauthenticatedView(APIView):
 class LoginView(APIView):
     """POST /api/v1/auth/login/"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_login"
     serializer_class = LoginSerializer
 
     def post(self, request):
@@ -142,6 +153,8 @@ class LoginView(APIView):
 class GoogleLoginView(APIView):
     """POST /api/v1/auth/google/"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_login"
 
     def post(self, request):
         serializer = GoogleLoginSerializer(data=request.data)
@@ -189,6 +202,8 @@ class LogoutAllView(APIView):
 class ForgotPasswordView(APIView):
     """POST /api/v1/auth/forgot-password/"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_password_reset"
 
     def post(self, request):
         serializer = ForgotPasswordSerializer(data=request.data)
@@ -200,6 +215,8 @@ class ForgotPasswordView(APIView):
 class PasswordSendOTPView(APIView):
     """POST /api/v1/auth/password/send-otp/"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_otp"
 
     def post(self, request):
         import random
@@ -243,6 +260,8 @@ class PasswordSendOTPView(APIView):
 class PasswordVerifyOTPView(APIView):
     """POST /api/v1/auth/password/verify-otp/"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_otp"
 
     def post(self, request):
         from django.core.cache import cache
@@ -269,6 +288,8 @@ class PasswordVerifyOTPView(APIView):
 class PasswordResetWithOTPView(APIView):
     """POST /api/v1/auth/password/reset-with-otp/"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_password_reset"
 
     def post(self, request):
         from django.core.cache import cache
@@ -307,6 +328,8 @@ class PasswordResetWithOTPView(APIView):
 class ResetPasswordView(APIView):
     """POST /api/v1/auth/reset-password/"""
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_password_reset"
 
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
