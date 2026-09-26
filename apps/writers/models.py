@@ -33,6 +33,9 @@ class WriterProfile(BaseModel):
         blank=True,
     )
     profile_photo = models.URLField(blank=True)
+    location = models.CharField(max_length=255, blank=True, default="India")
+    author_title = models.CharField(max_length=255, blank=True, default="tossatale author")
+    tagline = models.CharField(max_length=255, blank=True, default="Storyteller")
     website_url = models.URLField(blank=True)
 
     # Social links
@@ -104,3 +107,41 @@ class WriterProfile(BaseModel):
             if val:
                 links[field] = val
         return links
+
+
+class WriterSupport(models.Model):
+    """
+    Tracks reader support given to a writer.
+    Enforces 1 support per user / IP / session per writer per day.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    writer = models.ForeignKey(
+        WriterProfile,
+        on_delete=models.CASCADE,
+        related_name="supports",
+        db_index=True,
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="writer_supports",
+        db_index=True,
+    )
+    session_id = models.CharField(max_length=255, blank=True, db_index=True)
+    ip_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "writer_supports"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["writer", "created_at"]),
+            models.Index(fields=["user", "writer", "created_at"]),
+            models.Index(fields=["ip_hash", "writer", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"WriterSupport({self.writer.slug}, user={self.user_id or self.ip_hash})"
+

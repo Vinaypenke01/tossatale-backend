@@ -9,6 +9,7 @@ from apps.blogs.views import (
     PublicBlogViewView,
     AdminBlogListCreateView,
     AdminBlogDetailView,
+    MediaUploadView,
 )
 
 public_urlpatterns = [
@@ -21,6 +22,7 @@ public_urlpatterns = [
 admin_urlpatterns = [
     path("blogs/", AdminBlogListCreateView.as_view(), name="admin-blog-list-create"),
     path("blogs/<str:slug>/", AdminBlogDetailView.as_view(), name="admin-blog-detail"),
+    path("media/upload/", MediaUploadView.as_view(), name="admin-media-upload"),
 ]
 
 urlpatterns = public_urlpatterns

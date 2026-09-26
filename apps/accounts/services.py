@@ -596,6 +596,15 @@ class UserService:
             if "writer_bio" in data and wp.bio != data["writer_bio"]:
                 wp.bio = data["writer_bio"]
                 wp_changed = True
+            if "location" in data and wp.location != data["location"]:
+                wp.location = data["location"]
+                wp_changed = True
+            if "author_title" in data and wp.author_title != data["author_title"]:
+                wp.author_title = data["author_title"]
+                wp_changed = True
+            if "tagline" in data and wp.tagline != data["tagline"]:
+                wp.tagline = data["tagline"]
+                wp_changed = True
             if clean_slug and wp.slug != clean_slug:
                 from common.utils import generate_unique_slug
                 from django.utils.text import slugify
@@ -606,8 +615,8 @@ class UserService:
                 changed.append("writer_slug")
             if wp_changed:
                 wp.save()
-                changed.append("bio")
-        elif getattr(user, "role", "") in ["ADMIN", "WRITER"] and (clean_slug or data.get("bio") or data.get("writer_bio")):
+                changed.append("writer_profile")
+        elif getattr(user, "role", "") in ["ADMIN", "WRITER"] and (clean_slug or data.get("bio") or data.get("writer_bio") or data.get("location")):
             from apps.writers.models import WriterProfile
             from common.utils import generate_unique_slug
             from django.utils.text import slugify
@@ -618,6 +627,9 @@ class UserService:
                 user=user,
                 slug=final_slug,
                 bio=data.get("bio", "") or data.get("writer_bio", ""),
+                location=data.get("location", "India"),
+                author_title=data.get("author_title", "tossatale author"),
+                tagline=data.get("tagline", "Storyteller"),
                 is_active=True,
             )
             changed.append("writer_profile_created")
