@@ -27,7 +27,7 @@ class CategoryService:
     @staticmethod
     def create(data: dict, created_by=None) -> Category:
         slug = generate_unique_slug(Category, data["name"])
-        with transaction.atomic():
+        with transaction.atomic():  # type: ignore[attr-defined]
             return Category.objects.create(slug=slug, created_by=created_by, **data)
 
     @staticmethod
@@ -79,7 +79,7 @@ class AdminCategoryListView(generics.ListAPIView):
     search_fields = ["name"]
 
     def get_queryset(self):
-        return Category.all_objects.all()
+        return Category.objects.filter(is_deleted=False).order_by("display_order", "name")
 
     def post(self, request):
         serializer = CategoryWriteSerializer(data=request.data)
@@ -97,7 +97,12 @@ class AdminCategoryDetailView(APIView):
 
     def _get(self, pk):
         try:
-            return Category.all_objects.get(pk=pk)
+            import uuid
+            try:
+                uuid_obj = uuid.UUID(str(pk))
+                return Category.all_objects.get(pk=uuid_obj, is_deleted=False)
+            except ValueError:
+                return Category.all_objects.get(slug=pk, is_deleted=False)
         except Category.DoesNotExist:
             raise ResourceNotFoundError("Category not found.")
 
@@ -112,8 +117,10 @@ class AdminCategoryDetailView(APIView):
         return success_response(data=CategorySerializer(cat).data, message="Category updated.")
 
     def delete(self, request, pk):
-        self._get(pk).soft_delete()
-        return no_content_response()
+        cat = self._get(pk)
+        name = cat.name
+        cat.soft_delete()
+        return success_response(message=f'Category "{name}" deleted successfully.')
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -129,7 +136,7 @@ class AdminTagListView(generics.ListAPIView):
     search_fields = ["name"]
 
     def get_queryset(self):
-        return Tag.all_objects.all()
+        return Tag.objects.filter(is_deleted=False).order_by("name")
 
     def post(self, request):
         serializer = TagWriteSerializer(data=request.data)
@@ -144,7 +151,12 @@ class AdminTagDetailView(APIView):
 
     def _get(self, pk):
         try:
-            return Tag.all_objects.get(pk=pk)
+            import uuid
+            try:
+                uuid_obj = uuid.UUID(str(pk))
+                return Tag.all_objects.get(pk=uuid_obj, is_deleted=False)
+            except ValueError:
+                return Tag.all_objects.get(slug=pk, is_deleted=False)
         except Tag.DoesNotExist:
             raise ResourceNotFoundError("Tag not found.")
 
@@ -159,8 +171,10 @@ class AdminTagDetailView(APIView):
         return success_response(data=TagSerializer(tag).data, message="Tag updated.")
 
     def delete(self, request, pk):
-        self._get(pk).soft_delete()
-        return no_content_response()
+        tag = self._get(pk)
+        name = tag.name
+        tag.soft_delete()
+        return success_response(message=f'Tag "{name}" deleted successfully.')
 
 
 # ──────────────────────────────────────────────────────────────────────────────

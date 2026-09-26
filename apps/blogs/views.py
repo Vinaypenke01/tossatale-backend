@@ -11,7 +11,7 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 from common.permissions import IsAdmin
-from common.responses import success_response, created_response, no_content_response
+from common.responses import success_response, created_response, no_content_response, error_response
 from common.pagination import StandardResultsSetPagination
 from apps.blogs.models import Blog, BlogTag
 from apps.categories.models import Category, Tag
@@ -151,6 +151,28 @@ def _resolve_or_create_category(category_input):
     )
 
 
+from common.services.media_service import MediaService
+
+
+class MediaUploadView(APIView):
+    """
+    POST /api/v1/admin/media/upload/ or /api/v1/media/upload/
+    Uploads an image to Cloudinary CDN if credentials exist in .env,
+    otherwise gracefully falls back to optimized Base64 data URI storage.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        folder = request.data.get("folder", "blogs")
+        file_obj = request.FILES.get("file") or request.data.get("image") or request.data.get("file")
+
+        if not file_obj:
+            return error_response("No image file or data provided.", status_code=status.HTTP_400_BAD_REQUEST)
+
+        result = MediaService.upload_image(file_obj, folder=folder)
+        return success_response(data=result, message="Image processed successfully.")
+
+
 class AdminBlogListCreateView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
     pagination_class = StandardResultsSetPagination
@@ -198,6 +220,12 @@ class AdminBlogListCreateView(APIView):
         user_rt = data.get("reading_time")
         final_rt = user_rt if user_rt is not None and user_rt > 0 else (max(1, words // 200) if words > 0 else 1)
 
+        raw_cover = data.get("cover_image", "")
+        processed_cover = MediaService.upload_image(raw_cover, folder="blogs").get("url", raw_cover) if raw_cover else ""
+
+        raw_featured = data.get("featured_image", "")
+        processed_featured = MediaService.upload_image(raw_featured, folder="blogs").get("url", raw_featured) if raw_featured else ""
+
         blog = Blog.objects.create(
             author=request.user,
             title=data["title"],
@@ -205,8 +233,8 @@ class AdminBlogListCreateView(APIView):
             subtitle=subtitle_val,
             content=data["content"],
             plain_text_content=plain,
-            cover_image=data.get("cover_image", ""),
-            featured_image=data.get("featured_image", ""),
+            cover_image=processed_cover,
+            featured_image=processed_featured,
             category=category,
             seo_title=seo_t,
             seo_description=seo_d,
@@ -277,7 +305,11 @@ class AdminBlogDetailView(APIView):
         if "reading_time" in data and data["reading_time"] is not None and data["reading_time"] > 0:
             blog.reading_time = data["reading_time"]
         if "cover_image" in data:
-            blog.cover_image = data["cover_image"]
+            raw_cover = data["cover_image"]
+            blog.cover_image = MediaService.upload_image(raw_cover, folder="blogs").get("url", raw_cover) if raw_cover else ""
+        if "featured_image" in data:
+            raw_featured = data["featured_image"]
+            blog.featured_image = MediaService.upload_image(raw_featured, folder="blogs").get("url", raw_featured) if raw_featured else ""
 
         blog.save()
 

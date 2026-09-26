@@ -268,6 +268,26 @@ RESEND_API_KEY = env("RESEND_API_KEY", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="hello@tossatale.com")
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Media Storage (Cloudinary with Base64 Fallback)
+# ──────────────────────────────────────────────────────────────────────────────
+CLOUDINARY_URL = env("CLOUDINARY_URL", default="")
+CLOUDINARY_CLOUD_NAME = env("CLOUDINARY_CLOUD_NAME", default="")
+CLOUDINARY_API_KEY = env("CLOUDINARY_API_KEY", default="")
+CLOUDINARY_API_SECRET = env("CLOUDINARY_API_SECRET", default="")
+
+if CLOUDINARY_URL and (not CLOUDINARY_CLOUD_NAME or not CLOUDINARY_API_KEY or not CLOUDINARY_API_SECRET):
+    import re
+    match = re.match(r"cloudinary://([^:]+):([^@]+)@(.+)", CLOUDINARY_URL)
+    if match:
+        CLOUDINARY_API_KEY = match.group(1)
+        CLOUDINARY_API_SECRET = match.group(2)
+        CLOUDINARY_CLOUD_NAME = match.group(3)
+
+CLOUDINARY_ENABLED = bool(
+    CLOUDINARY_URL or (CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET)
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Google OAuth
 # ──────────────────────────────────────────────────────────────────────────────
 GOOGLE_CLIENT_ID = env("GOOGLE_CLIENT_ID", default="")

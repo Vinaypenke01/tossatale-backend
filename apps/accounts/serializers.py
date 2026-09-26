@@ -105,12 +105,16 @@ class UserMeSerializer(serializers.ModelSerializer):
     writer_slug = serializers.SerializerMethodField()
     writer_id = serializers.SerializerMethodField()
     writer_bio = serializers.SerializerMethodField()
+    location = serializers.SerializerMethodField()
+    author_title = serializers.SerializerMethodField()
+    tagline = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             "id", "email", "first_name", "last_name", "full_name",
             "display_name", "role", "profile_photo", "writer_slug", "writer_id", "writer_bio",
+            "location", "author_title", "tagline",
             "auth_provider", "is_email_verified", "is_active",
             "last_login", "created_at",
         ]
@@ -134,16 +138,37 @@ class UserMeSerializer(serializers.ModelSerializer):
             return obj.writer_profile.bio
         return ""
 
+    def get_location(self, obj):
+        if hasattr(obj, "writer_profile") and obj.writer_profile:
+            return obj.writer_profile.location or "India"
+        return "India"
+
+    def get_author_title(self, obj):
+        if hasattr(obj, "writer_profile") and obj.writer_profile:
+            return obj.writer_profile.author_title or "tossatale author"
+        return "tossatale author"
+
+    def get_tagline(self, obj):
+        if hasattr(obj, "writer_profile") and obj.writer_profile:
+            return obj.writer_profile.tagline or "Storyteller"
+        return "Storyteller"
+
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
     """Used for PATCH /user/profile/ — only writable user fields."""
     bio = serializers.CharField(required=False, allow_blank=True)
     writer_bio = serializers.CharField(required=False, allow_blank=True)
     writer_slug = serializers.CharField(required=False, allow_blank=True)
+    location = serializers.CharField(required=False, allow_blank=True)
+    author_title = serializers.CharField(required=False, allow_blank=True)
+    tagline = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = User
-        fields = ["first_name", "last_name", "display_name", "profile_photo", "bio", "writer_bio", "writer_slug"]
+        fields = [
+            "first_name", "last_name", "display_name", "profile_photo",
+            "bio", "writer_bio", "writer_slug", "location", "author_title", "tagline"
+        ]
 
 
 class NotificationPreferenceSerializer(serializers.ModelSerializer):

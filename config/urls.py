@@ -31,6 +31,8 @@ from apps.audit_logs.urls import admin_urlpatterns as audit_logs_admin
 from apps.categories.urls import public_urlpatterns as categories_public, admin_urlpatterns as categories_admin
 from apps.writers.urls import public_urlpatterns as writers_public, admin_urlpatterns as writers_admin
 
+from apps.blogs.views import MediaUploadView
+
 urlpatterns = [
     # Root Health Check
     path("", root_health_view, name="root-health"),
@@ -58,6 +60,9 @@ urlpatterns = [
 
     # ── Notifications ──
     path("api/v1/notifications/", include("apps.notifications.urls")),
+
+    # ── Media Upload (Cloudinary + Base64 Fallback) ──
+    path("api/v1/media/upload/", MediaUploadView.as_view(), name="media-upload"),
 
     # ── Public routes ──
     path("api/v1/public/", include(categories_public)),

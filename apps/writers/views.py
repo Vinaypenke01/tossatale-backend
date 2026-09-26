@@ -53,13 +53,66 @@ class PublicWriterDetailView(APIView):
             profile = WriterProfile.objects.select_related("user").get(slug=slug, is_active=True)
         except WriterProfile.DoesNotExist:
             raise ResourceNotFoundError("Writer not found.")
-        serializer = PublicWriterSerializer(profile)
+        serializer = PublicWriterSerializer(profile, context={"request": request})
         return success_response(data=serializer.data)
 
 
 class PublicWriterSupportView(APIView):
-    """POST /api/v1/public/writers/{slug}/support/"""
+    """
+    POST /api/v1/public/writers/{slug}/support/
+    GET  /api/v1/public/writers/{slug}/support/
+    Enforces strict 1 support per user / IP / session per writer per day.
+    """
     permission_classes = [AllowAny]
+
+    def _extract_identifiers(self, request):
+        ip_addr = request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip() or request.META.get("REMOTE_ADDR", "")
+        import hashlib
+        ip_h = hashlib.sha256(ip_addr.encode("utf-8")).hexdigest() if ip_addr else ""
+        session_id = request.headers.get("X-Session-ID") or getattr(request, "session", None) and request.session.session_key or ""
+        return ip_h, session_id
+
+    def _check_supported_today(self, profile, request):
+        from apps.writers.models import WriterSupport
+        from django.utils import timezone
+        from django.db.models import Q
+
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        ip_h, session_id = self._extract_identifiers(request)
+
+        if request.user and request.user.is_authenticated:
+            return WriterSupport.objects.filter(writer=profile, user=request.user, created_at__gte=today_start).exists()
+
+        if session_id or ip_h:
+            query = WriterSupport.objects.filter(writer=profile, created_at__gte=today_start)
+            if session_id and ip_h:
+                return query.filter(Q(session_id=session_id) | Q(ip_hash=ip_h)).exists()
+            elif session_id:
+                return query.filter(session_id=session_id).exists()
+            elif ip_h:
+                return query.filter(ip_hash=ip_h).exists()
+
+        return False
+
+    def get(self, request, slug):
+        try:
+            profile = WriterProfile.objects.select_related("user").get(slug=slug, is_active=True)
+        except WriterProfile.DoesNotExist:
+            raise ResourceNotFoundError("Writer not found.")
+
+        has_supported = self._check_supported_today(profile, request)
+        from apps.writers.serializers import _calculate_writer_likes
+        total_count = _calculate_writer_likes(profile)
+
+        return success_response(
+            data={
+                "slug": profile.slug,
+                "supports_count": total_count,
+                "total_supports": total_count,
+                "has_supported_today": has_supported,
+                "can_support": not has_supported,
+            }
+        )
 
     def post(self, request, slug):
         try:
@@ -67,17 +120,48 @@ class PublicWriterSupportView(APIView):
         except WriterProfile.DoesNotExist:
             raise ResourceNotFoundError("Writer not found.")
 
+        from apps.writers.models import WriterSupport
+        from apps.writers.serializers import _calculate_writer_likes
+
+        has_supported = self._check_supported_today(profile, request)
+        if has_supported:
+            total_count = _calculate_writer_likes(profile)
+            return success_response(
+                data={
+                    "slug": profile.slug,
+                    "supports_count": total_count,
+                    "total_supports": total_count,
+                    "already_supported": True,
+                    "has_supported_today": True,
+                    "is_supported": True,
+                },
+                message=f"You have already supported {profile.name} today! You can support again tomorrow."
+            )
+
+        ip_h, session_id = self._extract_identifiers(request)
+
+        WriterSupport.objects.create(
+            writer=profile,
+            user=request.user if request.user and request.user.is_authenticated else None,
+            session_id=session_id,
+            ip_hash=ip_h,
+        )
+
         profile.total_likes = (profile.total_likes or 0) + 1
         profile.save(update_fields=["total_likes"])
+
+        total_count = _calculate_writer_likes(profile)
 
         return success_response(
             data={
                 "slug": profile.slug,
-                "supports_count": profile.total_likes,
-                "total_supports": profile.total_likes,
+                "supports_count": total_count,
+                "total_supports": total_count,
+                "already_supported": False,
+                "has_supported_today": True,
                 "is_supported": True,
             },
-            message=f"Thank you for supporting {profile.name}!"
+            message=f"Thank you for supporting {profile.name}! ❤️"
         )
 
 
@@ -204,7 +288,7 @@ class AdminWriterDetailView(APIView):
     def delete(self, request, lookup):
         profile = _get_writer_profile_by_lookup(lookup)
         user = profile.user
-        with transaction.atomic():
+        with transaction.atomic():  # type: ignore[attr-defined]
             # If the user is only a writer (not staff/admin), delete user which cascades cleanly
             if user and user.role == UserRole.WRITER and not user.is_staff and not user.is_superuser:
                 user.delete()
@@ -269,7 +353,7 @@ class AdminWriterInviteView(APIView):
         last_name = request.data.get("last_name") or (name_parts[1] if len(name_parts) > 1 else "")
         password = request.data.get("password")
 
-        with transaction.atomic():
+        with transaction.atomic():  # type: ignore[attr-defined]
             user, created = User.objects.get_or_create(
                 email=email,
                 defaults={
