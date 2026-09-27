@@ -1,18 +1,36 @@
 # Tossatale Backend API
 
-Django 5 + Django REST Framework (DRF) backend service for the **Tossatale** digital story and short film publishing platform.
+[![Django](https://img.shields.io/badge/Django-5.1-092E20?style=for-the-badge&logo=django&logoColor=white)](https://www.djangoproject.com/)
+[![DRF](https://img.shields.io/badge/DRF-3.15-red?style=for-the-badge&logo=django&logoColor=white)](https://www.django-rest-framework.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io/)
+[![SimpleJWT](https://img.shields.io/badge/Auth-SimpleJWT%20%2B%20OAuth2-000000?style=for-the-badge&logo=jsonwebtokens&logoColor=white)](https://jwt.io/)
+
+Django 5 + Django REST Framework (DRF) backend service for the **Tossatale** digital story, essay, editorial journal, and short film publishing platform.
 
 ---
 
-## 🌟 Key Features
+## 🌐 Live API & Documentation Endpoints
+- **Live Frontend Application**: [https://tossatale.com](https://tossatale.com)
+- **Production API Base**: `https://tossatale.com/api/v1/`
+- **Swagger Interactive API Documentation**: `http://localhost:8000/api/docs/` (or `https://tossatale.com/api/docs/`)
+- **OpenAPI Schema (JSON)**: `http://localhost:8000/api/schema/`
+- **Django Administration Portal**: `http://localhost:8000/admin/`
 
-- **Authentication & Roles**: JWT Authentication (SimpleJWT) + Google OAuth 2.0 1-Click Login. User roles: `GUEST`, `READER`, `WRITER`, `ADMIN`.
-- **Stories & Series**: Longform stories, episodes, series management, estimated reading time calculations, bookmarks, likes, and view counters.
-- **Editorial Moderation Queue**: Admin approval workflows (`PENDING`, `APPROVED`, `REJECTED`, `REVISION_REQUESTED`) with feedback notes.
-- **Stitched Public Homepage API**: High-performance endpoint aggregating Hero Spotlights, Featured Stories, Latest Stories, Trending Stories, Featured Blogs, Short Films, and Announcement Bar.
+---
+
+## 🌟 Key Features & Ecosystem
+
+- **Authentication & Roles**: JWT Authentication (SimpleJWT) + Google OAuth 2.0 1-Click Login. Roles: `GUEST`, `READER`, `WRITER`, `ADMIN`.
+- **Granular API Rate Throttling**: Multi-tier scoped rate limiting defending against brute force & spam (`anon: 120/min`, `user: 600/min`, `auth_login: 15/min`, `auth_register: 10/min`, `auth_otp: 5/min`, `contact_submit: 10/hour`).
+- **Stories & Series**: Longform rich stories, chapters, serial management, auto reading time calculations, bookmarks, claps/likes, and view counters.
+- **Editorial Review Queue**: Multi-state admin approval workflows (`PENDING`, `APPROVED`, `REJECTED`, `REVISION_REQUESTED`) with feedback notes.
+- **Stitched Public Homepage API**: High-performance endpoint aggregating Hero Spotlights, Featured Stories, Latest Stories, Trending Stories, Featured Blogs, Short Films, and Announcement Bar with sub-50ms Redis caching.
 - **Admin Homepage Builder API**: Live section slot assignments (`STORY_SLOTS`), footer branding management, and custom announcement settings.
-- **Short Films & Video Library**: Video entity CRUD with metadata, category filtering, and status controls.
-- **Caching & Async Tasks**: Redis caching with 15-minute TTL and automated invalidation, paired with Celery task queues.
+- **Editorial Blogs & Short Films**: Full Markdown blog management and video metadata showcase with YouTube/Vimeo embedding.
+- **Transactional Emails**: Resend API integration for email verification, password reset, submission notifications, and contact forwarding.
+- **Media Cloud Storage**: Cloudinary integration for secure image uploads and asset optimizations.
+- **Unified Response Paradigm**: All endpoints return standard `{ success, message, data, errors }` envelopes.
 
 ---
 
@@ -92,26 +110,51 @@ Railway will automatically run migrations and start `gunicorn config.wsgi:applic
 
 ---
 
-## 🛠️ Project Architecture
+## 🛠️ Project Architecture (18 Modular Apps)
 
 ```
 tossatale-backend/
-├── config/             # Django settings, WSGI/ASGI, URLs, Swagger
-├── common/             # Base models, custom permissions, responses, constants
+├── config/                  # Django settings (base/local/prod), WSGI/ASGI, URLs, Swagger
+├── common/                  # BaseModel (UUID, soft-delete), custom permissions, responses, utils
 ├── apps/
-│   ├── authentication/ # User accounts, JWT, Google OAuth 2.0
-│   ├── stories/        # Stories, categories, tags, engagement stats
-│   ├── series/         # Multi-part story series & chapters
-│   ├── moderation/     # Admin review queue & editorial approvals
-│   ├── homepage/       # Stitched homepage & Admin builder API
-│   ├── blogs/          # Editorial blog posts
-│   ├── videos/         # Short films & video library
-│   ├── writers/        # Author profiles & verification
-│   └── engagements/   # Comments, bookmarks, likes, newsletter
-├── Procfile            # Production process runner for Railway
-├── requirements.txt    # Python package dependencies
-├── manage.py           # Django CLI management script
+│   ├── accounts/            # User authentication, JWT, Google OAuth 2.0, OTP, role state
+│   ├── analytics/           # Story reads, daily page views, engagement tracking
+│   ├── audit_logs/          # Administrator & writer system action audit logging
+│   ├── banners/             # Promotional & announcement bar configurations
+│   ├── blogs/               # Editorial journal markdown posts & categories
+│   ├── categories/          # Story taxonomy (Memoir, Fiction, Travel, Essays, etc.)
+│   ├── contacts/            # Public inquiries, rate-throttled contact form submissions
+│   ├── engagements/         # Story bookmarks, likes/claps, and comments
+│   ├── homepage/            # Stitched homepage aggregator & Admin homepage builder
+│   ├── moderation/          # Editorial review queue (approve, reject, revision workflows)
+│   ├── newsletters/         # Subscriber list, automated welcome & issue broadcasts
+│   ├── notifications/       # In-app writer & reader notification engine
+│   ├── search/              # Multi-entity vector & text search across stories, blogs, writers
+│   ├── series/              # Multi-part story series & episode chapter sequencing
+│   ├── settings_config/     # Site-wide settings, social links, footer configuration
+│   ├── stories/             # Core story catalog, tags, reading time calculator
+│   ├── videos/              # Short films, video documentary library & embeds
+│   └── writers/             # Writer profiles, verification badges, editorial badges
+├── tests/                   # Pytest test suite with Factory-Boy fixtures
+├── Procfile                 # Production process runner for Railway
+├── requirements.txt         # Python package dependencies
+├── manage.py                # Django CLI management script
 └── README.md
+```
+
+---
+
+## 🧪 Testing & Code Quality
+
+```bash
+# Run backend test suite with Pytest
+pytest
+
+# Run tests with coverage report
+pytest --cov=apps
+
+# Run individual app tests
+pytest apps/accounts/tests/
 ```
 
 ---
