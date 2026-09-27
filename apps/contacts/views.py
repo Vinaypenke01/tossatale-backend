@@ -21,7 +21,7 @@ class PublicContactFormView(APIView):
     throttle_scope = "contact_submit"
 
     def post(self, request):
-        ip = request.META.get("REMOTE_ADDR", "unknown")
+        ip = request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip() or request.META.get("REMOTE_ADDR", "unknown")
         cache_key = f"contact_rate_{ip}"
         submissions = cache.get(cache_key, 0)
 

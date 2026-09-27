@@ -1,6 +1,9 @@
 """
 apps/search/views.py — Unified Multi-Model Search View per §27 & §38
 """
+import operator
+from functools import reduce
+
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from django.db.models import Q
@@ -43,22 +46,23 @@ class UnifiedSearchView(APIView):
         # 1. Base querysets across all models
         story_qs = Story.objects.filter(status="PUBLISHED")
         if query:
-            story_qs = story_qs.filter(
-                Q(title__icontains=query)
-                | Q(subtitle__icontains=query)
-                | Q(plain_text_content__icontains=query)
-                | Q(content__icontains=query)
-                | Q(seo_title__icontains=query)
-                | Q(seo_description__icontains=query)
-                | Q(writer__user__first_name__icontains=query)
-                | Q(writer__user__last_name__icontains=query)
-                | Q(writer__user__display_name__icontains=query)
-                | Q(writer__slug__icontains=query)
-                | Q(category__name__icontains=query)
-                | Q(category__slug__icontains=query)
-                | Q(story_tags__tag__name__icontains=query)
-                | Q(story_tags__tag__slug__icontains=query)
-            ).distinct()
+            story_conditions = [
+                Q(title__icontains=query),
+                Q(subtitle__icontains=query),
+                Q(plain_text_content__icontains=query),
+                Q(content__icontains=query),
+                Q(seo_title__icontains=query),
+                Q(seo_description__icontains=query),
+                Q(writer__user__first_name__icontains=query),
+                Q(writer__user__last_name__icontains=query),
+                Q(writer__user__display_name__icontains=query),
+                Q(writer__slug__icontains=query),
+                Q(category__name__icontains=query),
+                Q(category__slug__icontains=query),
+                Q(story_tags__tag__name__icontains=query),
+                Q(story_tags__tag__slug__icontains=query),
+            ]
+            story_qs = story_qs.filter(reduce(operator.or_, story_conditions)).distinct()
         if category_filter:
             story_qs = story_qs.filter(
                 Q(category__slug__iexact=category_filter) | Q(category__name__iexact=category_filter)
@@ -66,49 +70,55 @@ class UnifiedSearchView(APIView):
 
         writer_qs = WriterProfile.objects.filter(is_active=True)
         if query:
-            writer_qs = writer_qs.filter(
-                Q(user__first_name__icontains=query)
-                | Q(user__last_name__icontains=query)
-                | Q(user__display_name__icontains=query)
-                | Q(user__email__icontains=query)
-                | Q(bio__icontains=query)
-                | Q(tagline__icontains=query)
-                | Q(author_title__icontains=query)
-                | Q(location__icontains=query)
-                | Q(slug__icontains=query)
-            ).distinct()
+            writer_conditions = [
+                Q(user__first_name__icontains=query),
+                Q(user__last_name__icontains=query),
+                Q(user__display_name__icontains=query),
+                Q(user__email__icontains=query),
+                Q(bio__icontains=query),
+                Q(tagline__icontains=query),
+                Q(author_title__icontains=query),
+                Q(location__icontains=query),
+                Q(slug__icontains=query),
+            ]
+            writer_qs = writer_qs.filter(reduce(operator.or_, writer_conditions)).distinct()
         else:
             writer_qs = writer_qs.order_by("-is_verified", "-total_published_stories")
 
         cat_qs = Category.objects.filter(is_active=True)
         if query:
-            cat_qs = cat_qs.filter(
-                Q(name__icontains=query) | Q(description__icontains=query) | Q(slug__icontains=query)
-            )
+            cat_conditions = [
+                Q(name__icontains=query),
+                Q(description__icontains=query),
+                Q(slug__icontains=query),
+            ]
+            cat_qs = cat_qs.filter(reduce(operator.or_, cat_conditions))
 
         blog_qs = Blog.objects.filter(status="PUBLISHED")
         if query:
-            blog_qs = blog_qs.filter(
-                Q(title__icontains=query)
-                | Q(subtitle__icontains=query)
-                | Q(plain_text_content__icontains=query)
-                | Q(content__icontains=query)
-                | Q(seo_title__icontains=query)
-                | Q(seo_description__icontains=query)
-                | Q(category__name__icontains=query)
-                | Q(blog_tags__tag__name__icontains=query)
-            ).distinct()
+            blog_conditions = [
+                Q(title__icontains=query),
+                Q(subtitle__icontains=query),
+                Q(plain_text_content__icontains=query),
+                Q(content__icontains=query),
+                Q(seo_title__icontains=query),
+                Q(seo_description__icontains=query),
+                Q(category__name__icontains=query),
+                Q(blog_tags__tag__name__icontains=query),
+            ]
+            blog_qs = blog_qs.filter(reduce(operator.or_, blog_conditions)).distinct()
 
         series_qs = StorySeries.objects.filter(status="PUBLISHED")
         if query:
-            series_qs = series_qs.filter(
-                Q(title__icontains=query)
-                | Q(description__icontains=query)
-                | Q(writer__user__first_name__icontains=query)
-                | Q(writer__user__last_name__icontains=query)
-                | Q(writer__user__display_name__icontains=query)
-                | Q(writer__slug__icontains=query)
-            ).distinct()
+            series_conditions = [
+                Q(title__icontains=query),
+                Q(description__icontains=query),
+                Q(writer__user__first_name__icontains=query),
+                Q(writer__user__last_name__icontains=query),
+                Q(writer__user__display_name__icontains=query),
+                Q(writer__slug__icontains=query),
+            ]
+            series_qs = series_qs.filter(reduce(operator.or_, series_conditions)).distinct()
 
         # Compute accurate counts for all tabs across entire database
         counts = {

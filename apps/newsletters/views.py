@@ -22,7 +22,7 @@ class SubscribeNewsletterView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        ip = request.META.get("REMOTE_ADDR", "unknown")
+        ip = request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip() or request.META.get("REMOTE_ADDR", "unknown")
         cache_key = f"newsletter_sub_rate_{ip}"
         submissions = cache.get(cache_key, 0)
 
