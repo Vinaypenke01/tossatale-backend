@@ -84,6 +84,9 @@ class AuthService:
         if not email or not password:
             raise ServiceValidationError("Email and password are required.")
 
+        if not email.endswith("@gmail.com"):
+            raise ServiceValidationError("Only @gmail.com email addresses are allowed.")
+
         if len(password) < 8:
             raise ServiceValidationError("Password must be at least 8 characters long.")
 

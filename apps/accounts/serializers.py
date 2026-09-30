@@ -25,6 +25,12 @@ class RegisterSerializer(serializers.Serializer):
     consent = serializers.BooleanField(required=False, default=False)
     terms_accepted = serializers.BooleanField(required=False, default=False)
 
+    def validate_email(self, value):
+        normalized = value.strip().lower()
+        if not normalized.endswith("@gmail.com"):
+            raise serializers.ValidationError("Only @gmail.com email addresses are allowed.")
+        return normalized
+
 
 class ReaderToWriterUpgradeSerializer(serializers.Serializer):
     pen_name = serializers.CharField(max_length=150)
