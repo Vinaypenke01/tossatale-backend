@@ -76,36 +76,36 @@ def send_password_reset_email(self_or_user_id, user_id=None):
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_story_submission_email(self_or_story_id, story_id=None):
-    """Notify admins when a new story is submitted for review."""
+    """Notify admins via email when a new story or revision is submitted for review."""
     target_id = story_id if story_id is not None else self_or_story_id
     try:
         from django.contrib.auth import get_user_model
-        from django.core.mail import send_mail
-        from django.conf import settings
+        from common.services.email_service import EmailService
         from apps.stories.models import Story
 
-        story = Story.objects.select_related("writer__user", "category").get(pk=target_id)
+        story = Story.objects.select_related("writer__user", "category").prefetch_related("revisions").get(pk=target_id)
         User = get_user_model()
         admin_emails = list(User.objects.filter(role="ADMIN", is_active=True).values_list("email", flat=True))
 
-        writer_name = getattr(story.writer, "pen_name", None) or getattr(story.writer, "name", "A writer")
+        writer_name = getattr(story.writer, "pen_name", None) or getattr(story.writer, "name", None) or getattr(story.writer.user, "display_name", None) or getattr(story.writer.user, "first_name", "A writer")
         category_name = getattr(story.category, "name", "General") if story.category else "General"
+        latest_rev = story.revisions.first()
+        is_revision = story.revisions.count() > 1
+        revision_count = latest_rev.version_number if latest_rev else 1
+        change_summary = getattr(latest_rev, "change_summary", "") or ""
 
         if admin_emails:
-            send_mail(
-                subject=f"[Story Submission] {story.title}",
-                message=(
-                    f"A new story has been submitted by {writer_name}:\n\n"
-                    f"Title: {story.title}\n"
-                    f"Category: {category_name}\n"
-                    f"Word Count: {story.word_count}\n\n"
-                    "Log into the Admin Panel to review and approve."
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=admin_emails,
-                fail_silently=True,
+            EmailService.send_story_submission_admin_email(
+                admin_emails=admin_emails,
+                story_title=story.title,
+                writer_name=writer_name,
+                category_name=category_name,
+                word_count=story.word_count or 0,
+                is_revision=is_revision,
+                revision_count=revision_count,
+                change_summary=change_summary,
             )
-            logger.info("Story submission notification sent to admins for story %s", target_id)
+            logger.info("Story submission notification sent to admins (%s) for story %s", len(admin_emails), target_id)
     except Exception as exc:
         logger.warning("Story submission notification email skipped or failed: %s", exc)
 

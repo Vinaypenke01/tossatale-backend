@@ -593,4 +593,113 @@ https://tossatale.com
             html_content=html_content,
         )
 
+    @staticmethod
+    def send_story_submission_admin_email(
+        admin_emails: list[str],
+        story_title: str,
+        writer_name: str,
+        category_name: str,
+        word_count: int,
+        is_revision: bool = False,
+        revision_count: int = 1,
+        change_summary: str = "",
+    ) -> dict:
+        """
+        Notify all active site administrators when a writer submits a new story or revision for review.
+        """
+        if not admin_emails:
+            return {"success": False, "message": "No admin emails provided."}
+
+        frontend_url = getattr(settings, "FRONTEND_URL", "https://tossatale.com").split(",")[0].strip()
+        review_url = f"{frontend_url}/admin/review-queue"
+
+        tag_title = f"Story Revision (v{revision_count})" if is_revision else "New Story Submission"
+        badge_bg = "#7c3aed20" if is_revision else "#f9731620"
+        badge_border = "#7c3aed50" if is_revision else "#f9731650"
+        badge_color = "#8b5cf6" if is_revision else "#f97316"
+
+        subject = f"[{'Revision v' + str(revision_count) if is_revision else 'New Submission'}] {story_title} — by {writer_name}"
+
+        change_summary_block = ""
+        if change_summary:
+            change_summary_block = f"""
+            <div style="background-color: #09090b; border-left: 3px solid {badge_color}; border-radius: 8px; padding: 14px 18px; margin: 18px 0;">
+              <p style="margin: 0 0 4px 0; font-size: 11px; color: #a1a1aa; font-weight: 700; text-transform: uppercase;">Author Note / What Changed:</p>
+              <p style="margin: 0; font-size: 13px; color: #e4e4e7; line-height: 1.5; font-style: italic;">"{change_summary}"</p>
+            </div>
+            """
+
+        html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="margin: 0; padding: 0; background-color: #0c0d0e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #f4f4f5;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="padding: 40px 15px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" max-width="560px" cellspacing="0" cellpadding="0" border="0" style="max-width: 560px; background-color: #18181b; border: 1px solid #27272a; border-radius: 20px; padding: 36px 40px;">
+          <tr>
+            <td align="center" style="border-bottom: 1px solid #27272a; padding-bottom: 20px;">
+              <h1 style="margin: 0; font-size: 26px; color: #ffffff;">tossatale</h1>
+              <p style="margin: 4px 0 0 0; font-size: 12px; color: #a1a1aa; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600;">
+                Editorial Review Desk
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding-top: 28px;">
+              <div style="display: inline-block; padding: 4px 12px; border-radius: 9999px; background-color: {badge_bg}; border: 1px solid {badge_border}; color: {badge_color}; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px;">
+                {tag_title}
+              </div>
+              <h2 style="margin: 0 0 12px 0; font-size: 22px; color: #ffffff; line-height: 1.3;">{story_title}</h2>
+              
+              <div style="background-color: #09090b; border: 1px solid #27272a; border-radius: 12px; padding: 16px 20px; margin: 16px 0;">
+                <p style="margin: 0 0 8px 0; font-size: 14px; color: #a1a1aa;">
+                  <strong>Author:</strong> <span style="color: #ffffff; font-weight: 600;">{writer_name}</span>
+                </p>
+                <p style="margin: 0 0 8px 0; font-size: 14px; color: #a1a1aa;">
+                  <strong>Category:</strong> <span style="color: #ffffff;">{category_name}</span>
+                </p>
+                <p style="margin: 0; font-size: 14px; color: #a1a1aa;">
+                  <strong>Word Count:</strong> <span style="color: #ffffff;">{word_count:,} words</span>
+                </p>
+              </div>
+
+              {change_summary_block}
+
+              <div style="text-align: center; margin: 28px 0;">
+                <a href="{review_url}" style="background-color: #f97316; color: #ffffff; padding: 12px 28px; text-decoration: none; font-weight: 700; border-radius: 9999px; display: inline-block;">
+                  Open Review Queue &rarr;
+                </a>
+              </div>
+              <p style="margin: 24px 0 0 0; font-size: 12px; color: #71717a; text-align: center; border-top: 1px solid #27272a; padding-top: 16px;">
+                Tossatale Editorial System Notification
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+"""
+        text_content = f"""
+Tossatale Editorial Alert: {tag_title}
+
+Title: {story_title}
+Author: {writer_name}
+Category: {category_name}
+Word Count: {word_count}
+{f'Author Note: "{change_summary}"' if change_summary else ''}
+
+Review now at: {review_url}
+"""
+        return EmailService.send_resend_email(
+            to=admin_emails,
+            subject=subject,
+            html_content=html_content,
+            text_content=text_content,
+        )
+
 

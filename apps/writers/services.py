@@ -39,7 +39,6 @@ class WriterService:
                 user=user,
                 slug=slug,
                 bio=data.get("bio", ""),
-                profile_photo=data.get("profile_photo", ""),
                 website_url=data.get("website_url", ""),
                 facebook_url=data.get("facebook_url", ""),
                 instagram_url=data.get("instagram_url", ""),
@@ -55,16 +54,24 @@ class WriterService:
     def update_writer(profile: WriterProfile, data: dict) -> WriterProfile:
         """Update writable writer profile fields."""
         with transaction.atomic():  # type: ignore[attr-defined]
+            user_update_fields = []
             if "name" in data and data["name"]:
                 full_name = data["name"].strip()
                 parts = full_name.split(" ", 1)
                 profile.user.first_name = parts[0]
                 profile.user.last_name = parts[1] if len(parts) > 1 else ""
                 profile.user.display_name = full_name
-                profile.user.save(update_fields=["first_name", "last_name", "display_name"])
+                user_update_fields.extend(["first_name", "last_name", "display_name"])
+
+            if "profile_photo" in data and data["profile_photo"]:
+                profile.user.profile_photo = data["profile_photo"]
+                user_update_fields.append("profile_photo")
+
+            if user_update_fields:
+                profile.user.save(update_fields=list(set(user_update_fields)))
 
             allowed = {
-                "gender", "bio", "profile_photo", "location", "author_title", "tagline",
+                "gender", "bio", "location", "author_title", "tagline",
                 "website_url", "facebook_url", "instagram_url", "x_url",
                 "linkedin_url", "youtube_url",
             }

@@ -42,15 +42,23 @@ class StoryTagSerializer(serializers.ModelSerializer):
 
 class StoryRevisionSerializer(serializers.ModelSerializer):
     category = CategorySerializer(read_only=True)
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    category_slug = serializers.CharField(source="category.slug", read_only=True)
+    edited_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = StoryRevision
         fields = [
             "id", "version_number", "title", "subtitle", "content",
-            "category", "seo_title", "seo_description", "edited_by",
-            "change_summary", "created_at"
+            "category", "category_name", "category_slug", "seo_title", "seo_description", "edited_by",
+            "edited_by_name", "change_summary", "created_at"
         ]
         read_only_fields = fields
+
+    def get_edited_by_name(self, obj):
+        if not obj.edited_by:
+            return "Author"
+        return getattr(obj.edited_by, "display_name", None) or getattr(obj.edited_by, "first_name", None) or getattr(obj.edited_by, "email", "Author")
 
 
 class StoryReviewSerializer(serializers.ModelSerializer):
@@ -197,6 +205,12 @@ class StoryDetailSerializer(serializers.ModelSerializer):
     chapters = serializers.SerializerMethodField()
     chapter_count = serializers.SerializerMethodField()
     reviews = StoryReviewSerializer(many=True, read_only=True)
+    revisions = StoryRevisionSerializer(many=True, read_only=True)
+    is_revision = serializers.SerializerMethodField()
+    revision_count = serializers.SerializerMethodField()
+    latest_revision = serializers.SerializerMethodField()
+    previous_revision = serializers.SerializerMethodField()
+    revision_diff = serializers.SerializerMethodField()
 
     class Meta:
         model = Story
@@ -209,8 +223,59 @@ class StoryDetailSerializer(serializers.ModelSerializer):
             "views_count", "likes_count", "shares_count", "bookmarks_count",
             "is_liked", "is_bookmarked", "trending_score", "submitted_at",
             "reviewed_at", "approved_at", "published_at", "scheduled_publish_at",
-            "reviews", "created_at", "updated_at"
+            "reviews", "revisions", "is_revision", "revision_count", "latest_revision",
+            "previous_revision", "revision_diff", "created_at", "updated_at"
         ]
+
+    def get_is_revision(self, obj):
+        return obj.revisions.count() > 1 or obj.published_at is not None
+
+    def get_revision_count(self, obj):
+        return obj.revisions.count()
+
+    def get_latest_revision(self, obj):
+        rev = obj.revisions.first()
+        return StoryRevisionSerializer(rev).data if rev else None
+
+    def get_previous_revision(self, obj):
+        revs = list(obj.revisions.all()[:2])
+        return StoryRevisionSerializer(revs[1]).data if len(revs) > 1 else None
+
+    def get_revision_diff(self, obj):
+        revs = list(obj.revisions.all()[:2])
+        if len(revs) < 2:
+            return {
+                "is_new_story": True,
+                "has_changes": False,
+                "title_changed": False,
+                "subtitle_changed": False,
+                "category_changed": False,
+                "word_count_diff": 0,
+                "change_summary": revs[0].change_summary if revs else "",
+            }
+        curr = revs[0]
+        prev = revs[1]
+        curr_content = curr.content or ""
+        prev_content = prev.content or ""
+        curr_words = len(curr_content.split())
+        prev_words = len(prev_content.split())
+        return {
+            "is_new_story": False,
+            "has_changes": True,
+            "title_changed": curr.title.strip() != prev.title.strip(),
+            "old_title": prev.title,
+            "new_title": curr.title,
+            "subtitle_changed": (curr.subtitle or "").strip() != (prev.subtitle or "").strip(),
+            "old_subtitle": prev.subtitle or "",
+            "new_subtitle": curr.subtitle or "",
+            "category_changed": curr.category_id != prev.category_id,
+            "old_category": prev.category.name if prev.category else None,
+            "new_category": curr.category.name if curr.category else None,
+            "word_count_diff": curr_words - prev_words,
+            "prev_word_count": prev_words,
+            "curr_word_count": curr_words,
+            "change_summary": curr.change_summary or "Revised by author",
+        }
 
     def get_chapters(self, obj):
         if not obj.is_multi_chapter:
@@ -273,6 +338,12 @@ class AdminStorySerializer(serializers.ModelSerializer):
     chapters = StoryChapterSerializer(many=True, read_only=True)
     chapter_count = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
+    revisions = StoryRevisionSerializer(many=True, read_only=True)
+    is_revision = serializers.SerializerMethodField()
+    revision_count = serializers.SerializerMethodField()
+    latest_revision = serializers.SerializerMethodField()
+    previous_revision = serializers.SerializerMethodField()
+    revision_diff = serializers.SerializerMethodField()
 
     class Meta:
         model = Story
@@ -286,6 +357,7 @@ class AdminStorySerializer(serializers.ModelSerializer):
             "is_featured", "allow_comments", "estimated_reading_time", "word_count",
             "views_count", "likes_count", "unauthenticated_like_attempts",
             "shares_count", "bookmarks_count", "trending_score", "reviews",
+            "revisions", "is_revision", "revision_count", "latest_revision", "previous_revision", "revision_diff",
             "created_at", "updated_at"
         ]
 
@@ -301,6 +373,56 @@ class AdminStorySerializer(serializers.ModelSerializer):
     def get_tags(self, obj):
         tags = [st.tag for st in obj.story_tags.all()]
         return TagSerializer(tags, many=True).data
+
+    def get_is_revision(self, obj):
+        return obj.revisions.count() > 1 or obj.published_at is not None
+
+    def get_revision_count(self, obj):
+        return obj.revisions.count()
+
+    def get_latest_revision(self, obj):
+        rev = obj.revisions.first()
+        return StoryRevisionSerializer(rev).data if rev else None
+
+    def get_previous_revision(self, obj):
+        revs = list(obj.revisions.all()[:2])
+        return StoryRevisionSerializer(revs[1]).data if len(revs) > 1 else None
+
+    def get_revision_diff(self, obj):
+        revs = list(obj.revisions.all()[:2])
+        if len(revs) < 2:
+            return {
+                "is_new_story": True,
+                "has_changes": False,
+                "title_changed": False,
+                "subtitle_changed": False,
+                "category_changed": False,
+                "word_count_diff": 0,
+                "change_summary": revs[0].change_summary if revs else "",
+            }
+        curr = revs[0]
+        prev = revs[1]
+        curr_content = curr.content or ""
+        prev_content = prev.content or ""
+        curr_words = len(curr_content.split())
+        prev_words = len(prev_content.split())
+        return {
+            "is_new_story": False,
+            "has_changes": True,
+            "title_changed": curr.title.strip() != prev.title.strip(),
+            "old_title": prev.title,
+            "new_title": curr.title,
+            "subtitle_changed": (curr.subtitle or "").strip() != (prev.subtitle or "").strip(),
+            "old_subtitle": prev.subtitle or "",
+            "new_subtitle": curr.subtitle or "",
+            "category_changed": curr.category_id != prev.category_id,
+            "old_category": prev.category.name if prev.category else None,
+            "new_category": curr.category.name if curr.category else None,
+            "word_count_diff": curr_words - prev_words,
+            "prev_word_count": prev_words,
+            "curr_word_count": curr_words,
+            "change_summary": curr.change_summary or "Revised by author",
+        }
 
 
 class StorySubmitSerializer(serializers.Serializer):

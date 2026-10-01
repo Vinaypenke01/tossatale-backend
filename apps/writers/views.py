@@ -181,7 +181,7 @@ class WriterProfileView(APIView):
                 "bio": "Tossatale Storyteller & Writer",
             }
         )
-        serializer = PublicWriterSerializer(profile)
+        serializer = PublicWriterSerializer(profile, context={"request": request})
         return success_response(data=serializer.data)
 
     def patch(self, request):
@@ -196,7 +196,7 @@ class WriterProfileView(APIView):
         serializer.is_valid(raise_exception=True)
         updated = WriterService.update_writer(profile, serializer.validated_data)
         return success_response(
-            data=PublicWriterSerializer(updated).data,
+            data=PublicWriterSerializer(updated, context={"request": request}).data,
             message="Profile updated.",
         )
 
@@ -384,7 +384,6 @@ class AdminWriterInviteView(APIView):
                     "slug": generate_unique_slug(WriterProfile, full_name or user.get_full_name()),
                     "gender": request.data.get("gender", "OTHER"),
                     "bio": request.data.get("bio", f"Writer profile for {full_name}"),
-                    "profile_photo": request.data.get("profile_photo", ""),
                     "website_url": request.data.get("website_url", ""),
                     "facebook_url": request.data.get("facebook_url", ""),
                     "instagram_url": request.data.get("instagram_url", ""),
@@ -398,7 +397,7 @@ class AdminWriterInviteView(APIView):
             if not prof_created:
                 # Update provided fields
                 for field in [
-                    "gender", "bio", "profile_photo", "website_url", "facebook_url",
+                    "gender", "bio", "website_url", "facebook_url",
                     "instagram_url", "x_url", "linkedin_url", "youtube_url",
                     "is_verified", "is_active",
                 ]:

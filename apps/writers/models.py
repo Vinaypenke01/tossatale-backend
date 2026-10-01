@@ -32,10 +32,9 @@ class WriterProfile(BaseModel):
         default="OTHER",
         blank=True,
     )
-    profile_photo = models.URLField(blank=True)
-    location = models.CharField(max_length=255, blank=True, default="India")
-    author_title = models.CharField(max_length=255, blank=True, default="tossatale author")
-    tagline = models.CharField(max_length=255, blank=True, default="Storyteller")
+    location = models.CharField(max_length=255, blank=True, default="")
+    author_title = models.CharField(max_length=255, blank=True, default="")
+    tagline = models.CharField(max_length=255, blank=True, default="")
     website_url = models.URLField(blank=True)
 
     # Social links

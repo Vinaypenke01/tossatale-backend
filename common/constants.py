@@ -44,8 +44,7 @@ class StoryStatus:
         (SCHEDULED, "Scheduled"),
     ]
 
-    # Valid source states for each transition
-    SUBMIT_FROM = [DRAFT, REJECTED]
+    SUBMIT_FROM = [DRAFT, REJECTED, PENDING_REVIEW, PUBLISHED]
     APPROVE_FROM = [PENDING_REVIEW]
     REJECT_FROM = [PENDING_REVIEW]
     PUBLISH_FROM = [APPROVED]

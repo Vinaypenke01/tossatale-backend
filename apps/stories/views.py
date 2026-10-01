@@ -105,7 +105,7 @@ class WriterStoryListCreateView(APIView):
         writer = _get_writer_profile(request.user)
 
         data = request.data.copy()
-        category_input = data.get("category")
+        category_input = data.get("category") or data.get("category_slug") or data.get("category_id")
         category_obj = resolve_category(category_input)
 
         if not category_obj:
@@ -201,7 +201,15 @@ class WriterStorySubmitView(APIView):
 
     def post(self, request, pk):
         writer = _get_writer_profile(request.user)
-        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        story = _resolve_story(pk)
+        if story.writer_id != writer.id and not request.user.is_staff:
+            raise PermissionDeniedError("You do not have access to this story.")
+        change_note = request.data.get("change_summary") or request.data.get("author_note") or request.data.get("note")
+        if change_note:
+            latest_rev = story.revisions.first()
+            if latest_rev:
+                latest_rev.change_summary = str(change_note).strip()
+                latest_rev.save(update_fields=["change_summary"])
         submitted_story = StoryService.submit_story(story, writer)
         context = {"request": request, **get_engagement_context(request)}
         return success_response(
@@ -215,7 +223,9 @@ class WriterStoryDuplicateView(APIView):
 
     def post(self, request, pk):
         writer = _get_writer_profile(request.user)
-        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk, writer=writer)
+        story = _resolve_story(pk)
+        if story.writer_id != writer.id and not request.user.is_staff:
+            raise PermissionDeniedError("You do not have access to this story.")
         cloned_story = StoryService.duplicate_story(story, writer)
         context = {"request": request, **get_engagement_context(request)}
         return created_response(
@@ -280,7 +290,7 @@ class AdminStoryListView(APIView):
         """Create and publish a story directly as Admin."""
         writer = _get_writer_profile(request.user)
         data = request.data.copy()
-        category_input = data.get("category")
+        category_input = data.get("category") or data.get("category_slug") or data.get("category_id")
         category_obj = resolve_category(category_input)
 
         if not category_obj:
@@ -434,11 +444,26 @@ class AdminReviewQueueView(APIView):
         return response
 
 
+def _resolve_story(pk):
+    """Safely retrieves a story by slug or UUID without throwing UUID format errors."""
+    story = Story.objects.filter(slug=pk).first()
+    if story:
+        return story
+    try:
+        uuid_val = uuid.UUID(str(pk))
+        story = Story.objects.filter(id=uuid_val).first()
+        if story:
+            return story
+    except (ValueError, TypeError):
+        pass
+    raise ResourceNotFoundError("Story not found.")
+
+
 class AdminApproveStoryView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request, pk):
-        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        story = _resolve_story(pk)
         if story.status != StoryStatus.PENDING_REVIEW and story.status != StoryStatus.APPROVED:
             story.status = StoryStatus.PENDING_REVIEW
             story.save(update_fields=["status", "updated_at"])
@@ -459,7 +484,7 @@ class AdminRejectStoryView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request, pk):
-        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        story = _resolve_story(pk)
         feedback = (
             request.data.get("rejection_feedback")
             or request.data.get("feedback")
@@ -489,7 +514,7 @@ class AdminPublishStoryView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request, pk):
-        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        story = _resolve_story(pk)
         if story.status != StoryStatus.APPROVED:
             story.status = StoryStatus.APPROVED
             story.save(update_fields=["status", "updated_at"])
@@ -505,7 +530,7 @@ class AdminArchiveStoryView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request, pk):
-        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        story = _resolve_story(pk)
         story.status = StoryStatus.ARCHIVED
         story.archived_at = timezone.now()
         story.save(update_fields=["status", "archived_at", "updated_at"])
@@ -519,7 +544,7 @@ class AdminFeatureStoryView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request, pk):
-        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        story = _resolve_story(pk)
         is_featured = request.data.get("is_featured", True)
         story.is_featured = is_featured
         story.save(update_fields=["is_featured", "updated_at"])
@@ -533,7 +558,7 @@ class AdminStoryRevisionsView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request, pk):
-        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        story = _resolve_story(pk)
         revisions = StoryRevision.objects.filter(story=story).order_by("-version_number")
         serializer = StoryRevisionSerializer(revisions, many=True)
         return success_response(data=serializer.data)
@@ -543,7 +568,7 @@ class AdminStoryReviewsView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request, pk):
-        story = Story.objects.filter(slug=pk).first() or get_object_or_404(Story, pk=pk)
+        story = _resolve_story(pk)
         reviews = StoryReview.objects.filter(story=story).order_by("-reviewed_at")
         serializer = StoryReviewSerializer(reviews, many=True)
         return success_response(data=serializer.data)
@@ -551,10 +576,29 @@ class AdminStoryReviewsView(APIView):
 
 def _get_story_for_writer_or_admin(pk, user):
     """Retrieves a story for either an admin (any story) or writer (own story)."""
-    if getattr(user, "role", "") == UserRole.ADMIN or getattr(user, "is_staff", False):
-        return Story.objects.filter(slug=pk).first() or Story.objects.filter(id=pk).first() or get_object_or_404(Story, pk=pk)
-    writer = _get_writer_profile(user)
-    return Story.objects.filter(slug=pk, writer=writer).first() or Story.objects.filter(id=pk, writer=writer).first() or get_object_or_404(Story, pk=pk, writer=writer)
+    is_admin = getattr(user, "role", "") == UserRole.ADMIN or getattr(user, "is_staff", False)
+    writer = None if is_admin else _get_writer_profile(user)
+
+    if is_admin:
+        story = Story.objects.filter(slug=pk).first()
+    else:
+        story = Story.objects.filter(slug=pk, writer=writer).first()
+
+    if story:
+        return story
+
+    try:
+        uuid_val = uuid.UUID(str(pk))
+        if is_admin:
+            story = Story.objects.filter(id=uuid_val).first()
+        else:
+            story = Story.objects.filter(id=uuid_val, writer=writer).first()
+        if story:
+            return story
+    except (ValueError, TypeError):
+        pass
+
+    raise ResourceNotFoundError("Story not found or you do not have permission to access it.")
 
 
 class WriterChapterListCreateView(APIView):
