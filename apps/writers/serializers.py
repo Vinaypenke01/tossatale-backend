@@ -7,50 +7,56 @@ from apps.accounts.serializers import UserMeSerializer
 
 
 def _calculate_writer_stories(writer_profile) -> int:
-    from apps.stories.models import Story
+    from apps.stories.models import Story, StoryStatus
     from apps.series.models import StorySeries
+    from common.constants import SeriesStatus
     from django.db.models import Q
 
-    # 1. Direct stories linked to writer_profile or user
+    # 1. Direct stories linked to writer_profile or user (approved / published only)
     direct_stories = Story.objects.filter(
-        Q(writer=writer_profile) | Q(created_by=writer_profile.user)
+        Q(writer=writer_profile) | Q(created_by=writer_profile.user),
+        status=StoryStatus.PUBLISHED,
     ).count()
 
     # 2. Series linked to writer_profile or user
     series_count = StorySeries.objects.filter(
-        Q(writer=writer_profile) | Q(created_by=writer_profile.user)
+        Q(writer=writer_profile) | Q(created_by=writer_profile.user),
+        status__in=[SeriesStatus.PUBLISHED, SeriesStatus.COMPLETED],
     ).count()
 
-    return max(direct_stories, series_count, writer_profile.total_stories or 0)
+    return direct_stories + series_count
 
 
 def _calculate_writer_reads(writer_profile) -> int:
-    from apps.stories.models import Story
+    from apps.stories.models import Story, StoryStatus
     from django.db.models import Sum, Q
 
     reads = Story.objects.filter(
-        Q(writer=writer_profile) | Q(created_by=writer_profile.user)
+        Q(writer=writer_profile) | Q(created_by=writer_profile.user),
+        status=StoryStatus.PUBLISHED,
     ).aggregate(Sum("views_count"))["views_count__sum"] or 0
-    return max(reads, writer_profile.total_reads or 0)
+    return reads
 
 
 def _calculate_writer_likes(writer_profile) -> int:
-    from apps.stories.models import Story
+    from apps.stories.models import Story, StoryStatus
     from apps.writers.models import WriterSupport
     from django.db.models import Sum, Q
 
     story_likes = Story.objects.filter(
-        Q(writer=writer_profile) | Q(created_by=writer_profile.user)
+        Q(writer=writer_profile) | Q(created_by=writer_profile.user),
+        status=StoryStatus.PUBLISHED,
     ).aggregate(Sum("likes_count"))["likes_count__sum"] or 0
     direct_supports = WriterSupport.objects.filter(writer=writer_profile).count()
 
-    return max(story_likes + direct_supports, direct_supports, writer_profile.total_likes or 0)
+    return story_likes + direct_supports
 
 
 class PublicWriterSerializer(serializers.ModelSerializer):
     """Public-facing writer profile representation."""
     name = serializers.SerializerMethodField()
     email = serializers.SerializerMethodField()
+    profile_photo = serializers.SerializerMethodField()
     social_links = serializers.SerializerMethodField()
     total_stories = serializers.SerializerMethodField()
     total_reads = serializers.SerializerMethodField()
@@ -75,6 +81,9 @@ class PublicWriterSerializer(serializers.ModelSerializer):
 
     def get_email(self, obj):
         return obj.user.email
+
+    def get_profile_photo(self, obj):
+        return getattr(obj.user, "profile_photo", "") or ""
 
     def get_social_links(self, obj):
         return obj.get_social_links()
@@ -126,7 +135,7 @@ class WriterProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = WriterProfile
         fields = [
-            "name", "gender", "bio", "profile_photo",
+            "name", "gender", "bio",
             "location", "author_title", "tagline",
             "website_url", "facebook_url", "instagram_url",
             "x_url", "linkedin_url", "youtube_url",
@@ -136,6 +145,7 @@ class WriterProfileUpdateSerializer(serializers.ModelSerializer):
 class AdminWriterSerializer(serializers.ModelSerializer):
     """Full writer detail for Admin — includes user info and verification."""
     user = UserMeSerializer(read_only=True)
+    profile_photo = serializers.SerializerMethodField()
     social_links = serializers.SerializerMethodField()
     total_stories = serializers.SerializerMethodField()
     total_reads = serializers.SerializerMethodField()
@@ -157,6 +167,9 @@ class AdminWriterSerializer(serializers.ModelSerializer):
             "verified_by", "total_stories", "total_reads",
             "total_likes", "total_supports", "total_shares", "created_at",
         ]
+
+    def get_profile_photo(self, obj):
+        return getattr(obj.user, "profile_photo", "") or ""
 
     def get_social_links(self, obj):
         return obj.get_social_links()

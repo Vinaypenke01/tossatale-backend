@@ -198,12 +198,10 @@ class StoryService:
             raise PermissionDeniedError("You do not have permission to edit this story.")
 
         # Status transition check:
-        # 1. ADMIN users can edit stories and series in any status.
-        # 2. Multi-chapter series can have their metadata (title, subtitle, category, tags, series_status) updated at any stage.
-        # 3. Standalone stories can only be edited by author when in DRAFT or REJECTED status.
+        # Authors can edit their stories across all standard authoring states (DRAFT, REJECTED, PENDING_REVIEW, PUBLISHED).
         if not is_admin and not story.is_multi_chapter:
-            if story.status not in [StoryStatus.DRAFT, StoryStatus.REJECTED]:
-                raise InvalidStateTransitionError("Only DRAFT or REJECTED stories can be edited.")
+            if story.status not in [StoryStatus.DRAFT, StoryStatus.REJECTED, StoryStatus.PENDING_REVIEW, StoryStatus.PUBLISHED]:
+                raise InvalidStateTransitionError("Only DRAFT, REJECTED, PENDING_REVIEW, or PUBLISHED stories can be edited.")
 
         if "title" in data:
             title = data["title"].strip()
@@ -253,7 +251,12 @@ class StoryService:
             story.subtitle = data["subtitle"].strip() if data.get("subtitle") else ""
 
         if "category_id" in data:
-            story.category = Category.objects.get(id=data["category_id"])
+            if data["category_id"]:
+                cat = Category.objects.filter(id=data["category_id"]).first()
+                if cat:
+                    story.category = cat
+            else:
+                story.category = None
 
         if "seo_title" in data:
             story.seo_title = data["seo_title"][:70]
@@ -306,12 +309,38 @@ class StoryService:
 
     @classmethod
     def delete_story(cls, story: Story, user):
-        """Soft/hard delete — only allowed for DRAFT stories."""
-        if story.status != StoryStatus.DRAFT:
-            raise InvalidStateTransitionError("Only DRAFT stories can be deleted.")
+        """Delete story — allowed for the authoring writer or admin."""
+        is_admin = getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+        if story.writer and story.writer.user != user and not is_admin:
+            raise PermissionDeniedError("You do not have permission to delete this story.")
+
+        was_published = story.status == StoryStatus.PUBLISHED
+        writer = story.writer
+        story_title = story.title
+        story_id = str(story.id)
+        story_status = story.status
         tag_ids = list(story.story_tags.values_list("tag_id", flat=True))
+
         story.delete()
         cls._sync_tags_usage(tag_ids)
+
+        if was_published and writer:
+            published_count = Story.objects.filter(writer=writer, status=StoryStatus.PUBLISHED).count()
+            writer.total_published_stories = published_count
+            writer.save(update_fields=["total_published_stories", "updated_at"])
+            try:
+                from django.core.cache import cache
+                cache.delete("homepage")
+                cache.delete("public-stories")
+            except Exception:
+                pass
+
+        AuditLogService.log(
+            actor=user,
+            action=AuditAction.DELETE,
+            obj=None,
+            changes={"deleted_story_title": story_title, "story_id": story_id, "status": story_status},
+        )
 
     @classmethod
     def duplicate_story(cls, story, writer) -> Story:
@@ -364,10 +393,12 @@ class StoryService:
         if story.writer_id != writer.id:
             raise PermissionDeniedError("You can only submit your own story.")
 
-        if story.status not in [StoryStatus.DRAFT, StoryStatus.REJECTED]:
+        if story.status not in [StoryStatus.DRAFT, StoryStatus.REJECTED, StoryStatus.PENDING_REVIEW, StoryStatus.PUBLISHED]:
             raise InvalidStateTransitionError(
-                f"Cannot submit story with status '{story.status}'. Must be DRAFT or REJECTED."
+                f"Cannot submit story with status '{story.status}'. Must be DRAFT, REJECTED, PENDING_REVIEW, or PUBLISHED."
             )
+
+        was_published = story.status == StoryStatus.PUBLISHED
 
         if not story.title:
             raise ServiceValidationError("Story title is required for submission.")
@@ -400,6 +431,17 @@ class StoryService:
         story.submitted_at = timezone.now()
         story.rejection_feedback = ""  # Clear old feedback
         story.save(update_fields=["status", "moderation_status", "submitted_at", "rejection_feedback", "updated_at"])
+
+        if was_published and writer:
+            published_count = Story.objects.filter(writer=writer, status=StoryStatus.PUBLISHED).count()
+            writer.total_published_stories = published_count
+            writer.save(update_fields=["total_published_stories", "updated_at"])
+            try:
+                from django.core.cache import cache
+                cache.delete("homepage")
+                cache.delete("public-stories")
+            except Exception:
+                pass
 
         # Synchronous/Safe notification email
         try:
@@ -608,6 +650,30 @@ class StoryService:
         return story
 
     @classmethod
+    def delete_story(cls, story: Story, user) -> None:
+        """Deletes a story. Writers can delete their own stories; admins can delete any story."""
+        is_admin = getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+        if story.writer and story.writer.user != user and not is_admin:
+            raise PermissionDeniedError("You do not have permission to delete this story.")
+
+        was_published = (story.status == StoryStatus.PUBLISHED)
+        writer = story.writer
+
+        story.delete()
+
+        if was_published and writer:
+            writer.total_published_stories = Story.objects.filter(
+                writer=writer, status=StoryStatus.PUBLISHED
+            ).count()
+            writer.save(update_fields=["total_published_stories"])
+            try:
+                from django.core.cache import cache
+                cache.delete("homepage")
+                cache.delete("public-stories")
+            except Exception:
+                pass
+
+    @classmethod
     def feature_story(cls, story, admin, is_featured: bool) -> Story:
         """Toggles is_featured status on a story."""
         story.is_featured = is_featured
@@ -660,7 +726,8 @@ class StoryService:
     @classmethod
     def toggle_series_status(cls, story: Story, user, new_status: str | None = None) -> Story:
         """Toggles or sets the series status (ONGOING <-> COMPLETED)."""
-        if story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+        is_admin = getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+        if (not story.writer or story.writer.user != user) and not is_admin:
             raise PermissionDeniedError("You do not have permission to modify this series status.")
 
         target_status = new_status or (
@@ -716,7 +783,8 @@ class ChapterService:
     @classmethod
     def create_chapter(cls, story, data: dict, user) -> StoryChapter:
         """Creates a chapter under a multi-chapter story."""
-        if story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+        is_admin = getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+        if (not story.writer or story.writer.user != user) and not is_admin:
             raise PermissionDeniedError("You do not have permission to add chapters to this story.")
 
         content = data.get("content", "").strip()
@@ -765,7 +833,8 @@ class ChapterService:
     @classmethod
     def update_chapter(cls, chapter, data: dict, user):
         """Updates chapter title, content, reading time, or status."""
-        if chapter.story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+        is_admin = getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+        if (not chapter.story.writer or chapter.story.writer.user != user) and not is_admin:
             raise PermissionDeniedError("You do not have permission to edit this chapter.")
 
         if "title" in data:
@@ -794,7 +863,7 @@ class ChapterService:
                 chapter.save()
                 cls.recalculate_story_metrics(chapter.story)
                 return cls.submit_chapter(chapter, user)
-            elif new_status == StoryStatus.PUBLISHED and getattr(user, "role", "") == "ADMIN":
+            elif new_status == StoryStatus.PUBLISHED and (getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False)):
                 chapter.save()
                 cls.recalculate_story_metrics(chapter.story)
                 return cls.publish_chapter(chapter, user)
@@ -811,7 +880,8 @@ class ChapterService:
     @classmethod
     def submit_chapter(cls, chapter, user) -> StoryChapter:
         """Submits a single chapter for editorial review."""
-        if chapter.story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+        is_admin = getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+        if (not chapter.story.writer or chapter.story.writer.user != user) and not is_admin:
             raise PermissionDeniedError("You do not have permission to submit this chapter.")
 
         if not chapter.content or len(chapter.content.strip()) < 20:
@@ -829,6 +899,13 @@ class ChapterService:
             chapter.story.status = StoryStatus.PENDING_REVIEW
             chapter.story.submitted_at = now
             chapter.story.save(update_fields=["status", "submitted_at", "updated_at"])
+
+        # Trigger admin notification email
+        try:
+            from apps.notifications.tasks import send_story_submission_email
+            send_story_submission_email(str(chapter.story.id))
+        except Exception:
+            pass
 
         return chapter
 
@@ -916,7 +993,8 @@ class ChapterService:
     def delete_chapter(cls, chapter, user) -> None:
         """Deletes a chapter and compacts the order sequence of remaining chapters."""
         story = chapter.story
-        if story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+        is_admin = getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+        if (not story.writer or story.writer.user != user) and not is_admin:
             raise PermissionDeniedError("You do not have permission to delete this chapter.")
 
         deleted_order = chapter.order
@@ -929,7 +1007,8 @@ class ChapterService:
     @classmethod
     def reorder_chapters(cls, story, ordered_ids: list, user) -> list:
         """Bulk reorders chapters for a story."""
-        if story.writer.user != user and getattr(user, "role", "") != "ADMIN":
+        is_admin = getattr(user, "role", "") == "ADMIN" or getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)
+        if (not story.writer or story.writer.user != user) and not is_admin:
             raise PermissionDeniedError("You do not have permission to reorder chapters on this story.")
 
         chapters = {str(c.id): c for c in story.chapters.all()}
